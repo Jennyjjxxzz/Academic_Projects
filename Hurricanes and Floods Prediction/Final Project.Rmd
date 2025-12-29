@@ -1,0 +1,301 @@
+---
+title: "Data 607_Final Project"
+author: "Jiaxin Zheng"
+date: "2024-12-10"
+output:
+  pdf_document: default
+  html_document: default
+---
+## Research question:“Do higher temperatures result in more severe hurricanes or floods?”
+
+### In this Projet I will be exporting with two data sets. 
+- The NOAA Storm Events Dataset: it will provide detailed information about the natural disaster, including date, event type and location. 
+- The NASA Power API: Will supply climate temperature and precipitation to the locations and time periods of the disasters. (only can get one location at a time, So I will compare Temperature vs. Locations (Florida and New York))
+
+### By analysis these datasets will highlight the influence of climate change on Hurricanes or floods.
+
+```{r setup, include=FALSE}
+# Load required libraries
+library(httr)
+library(jsonlite)
+library(tidyverse)
+library(kableExtra)
+library(dplyr)
+library(maps)
+```
+
+
+### First: read the two cvs files from NOAA Storm Events Dataset
+- 1.NOAA storm location dataset with Event_ID connect to the second dataset
+```{r}
+# Read NOAA storm location CSV file
+df1 <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Data607_Fianl_Project/refs/heads/main/StormEvents_locations-ftp_v1.0_d2023_c20241121.csv")
+
+head(df1)
+```
+
+- 2. NOAA's detail CSV file with date, event type, source, state, begin latitude and longitude.
+```{r}
+# Read NOAA storm detail CSV file
+df2 <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Data607_Fianl_Project/refs/heads/main/StormEvents_details-ftp_v1.0_d2023_c20241121.csv")
+
+head(df2)
+```
+
+### Merge the two CSV files
+```{r}
+# Merge NOAA Locations and Details datasets
+noaa_merged <- df1 %>%
+  inner_join(df2, by = c("EPISODE_ID" = "EPISODE_ID", "EVENT_ID" = "EVENT_ID"))
+
+head(noaa_merged)
+```
+
+```{r}
+#Create the date column (there are repeat date columns)
+noaa_clean <- noaa_merged %>%
+  mutate(
+    BEGIN_DATE = as.Date(paste0(BEGIN_YEARMONTH, sprintf("%02d", BEGIN_DAY)), format = "%Y%m%d")
+  )
+```
+
+```{r}
+#Select columns for final clean dataset
+noaa_clean <- noaa_clean %>%
+  select(
+    BEGIN_DATE, STATE, EVENT_TYPE, YEAR, MONTH_NAME, BEGIN_LAT, BEGIN_LON
+  )
+
+head(noaa_clean)
+```
+
+
+### Second: pull out the data from NASA Power API (Only can pull out one location at a time). (This is for Florida)
+```{r}
+# Florida NASA Power API URL
+fl_url <- paste0("https://power.larc.nasa.gov/api/temporal/hourly/point?",
+                 "start=20230101&end=20231231&latitude=27.9944&longitude=-81.7603",
+                 "&community=ag&parameters=T2M&format=json&header=true&time-standard=lst")
+```
+
+```{r}
+# Fetch Florida climate data
+fl_response <- httr::GET(fl_url)
+```
+
+```{r}
+# Parse JSON response
+fl_climate_data <- fromJSON(content(fl_response, "text"), flatten = TRUE)
+
+# Extract temperature data (T2M) for Florida
+fl_t2m_data <- fl_climate_data$properties$parameter$T2M
+fl_climate_df <- tibble(
+  Date = names(fl_t2m_data),
+  T2M = unlist(fl_t2m_data)
+) %>%
+  mutate(
+    Date = as.Date(substr(Date, 1, 8), format = "%Y%m%d"),
+    State = "FLORIDA"
+  )
+
+head(fl_climate_df)
+```
+
+
+### Get Url_2 temperature data for New York.
+```{r}
+# New York NASA Power API URL
+ny_url <- paste0("https://power.larc.nasa.gov/api/temporal/hourly/point?",
+                 "start=20230101&end=20231231&latitude=40.7128&longitude=-74.0060",
+                 "&community=ag&parameters=T2M&format=json&header=true&time-standard=lst")
+```
+
+```{r}
+# Fetch New York climate data
+ny_response <- httr::GET(ny_url)
+```
+
+```{r}
+# Parse JSON response
+ny_climate_data <- fromJSON(content(ny_response, "text"), flatten = TRUE)
+
+# Extract temperature data (T2M) for New York
+ny_t2m_data <- ny_climate_data$properties$parameter$T2M
+ny_climate_df <- tibble(
+  Date = names(ny_t2m_data),
+  T2M = unlist(ny_t2m_data)
+) %>%
+  mutate(
+    Date = as.Date(substr(Date, 1, 8), format = "%Y%m%d"),
+    State = "NEW YORK"
+  )
+
+head(ny_climate_df)
+```
+
+
+```{r}
+# Combine Florida and New York climate datasets as one
+climate_df <- bind_rows(fl_climate_df, ny_climate_df)
+
+head(climate_df)
+```
+
+
+
+```{r}
+# Check for any na data values
+colSums(is.na(noaa_clean))
+colSums(is.na(climate_df))
+```
+
+### Merge NOAA and NASA datasets as final dataset
+```{r}
+# Merge NOAA and NASA datasets
+final_merged <- noaa_clean %>%
+  inner_join(climate_df, by = c("BEGIN_DATE" = "Date", "STATE" = "State"))
+
+head(final_merged)
+```
+
+```{r}
+df_final <- final_merged %>%
+  select(-c(YEAR, MONTH_NAME))
+
+head(df_final)
+```
+
+```{r}
+colnames(df_final) <- c("Date", "State", "EventType", "Begin_Lat", "Begin_Lon", "Temperature")
+
+head(df_final)
+```
+
+### In this data, we see the avg_temperature and total_events happened in state Florida and New York
+```{r}
+# Count events by state and event type
+df_final %>%
+  group_by(State, EventType) %>%
+  summarize(
+    Total_Events = n(),
+    Avg_Temperature = mean(Temperature, na.rm = TRUE)
+  )
+```
+
+
+### Florida's temperature is warmer than New York, but New York's natural disasters are more frequent.
+```{r}
+ggplot(df_final, aes(x = Date, y = Temperature, color = State)) +
+  geom_line() +
+  labs(title = "Temperature Trends by State", x = "Date", y = "Temperature (°C)")
+```
+
+```{r}
+ggplot(df_final, aes(x = Temperature, fill = EventType)) +
+  geom_histogram(binwidth = 1, alpha = 0.7) +
+  facet_wrap(~State) +
+  labs(title = "Temperature vs. Event Frequency", x = "Temperature (°C)", y = "Event Count")
+```
+
+
+
+### Now, we focus on hurricanes (typhoons) and floods in the year 2023 to examine whether higher temperatures influence the frequency of these events. 
+- There is no hurricanes (typhoons) were recorded in the New York and Florida areas during this period
+```{r}
+# filter the hurricanes (typhoons) and flood
+
+filtered_data <- df_final %>%
+  filter(EventType %in% c("Hurricane(Typhoon)", "Flood"))
+
+head(filtered_data)
+```
+
+```{r}
+# Count floods by state
+flood_count_by_state <- filtered_data %>%
+  filter(EventType == "Flood") %>% 
+  group_by(State) %>%
+  summarize(Count = n())
+
+print(flood_count_by_state)
+
+```
+
+
+# Use the map to show the temperature vs flood
+```{r}
+# Define the bounding box for the U.S.
+bbox <- c(xmin = -125, xmax = -65, ymin = 25, ymax = 50)
+
+# Create a basic map
+ggplot() +
+  # Add a rectangular base map
+  geom_rect(
+    aes(xmin = bbox[1], xmax = bbox[2], ymin = bbox[3], ymax = bbox[4]),
+    fill = "lightblue", color = "gray"
+  ) +
+  # Plot disaster points
+  geom_point(
+    data = filtered_data, 
+    aes(x = Begin_Lon, y = Begin_Lat, color = EventType), 
+    alpha = 0.7, size = 2
+  ) +
+  labs(
+    title = "Disaster Locations in the U.S.",
+    x = "Longitude", 
+    y = "Latitude",
+    color = "Event Type"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+# US map
+us_map <- map_data("state")
+
+ggplot() +
+  # Add state borders
+  geom_polygon(
+    data = us_map, aes(x = long, y = lat, group = group),
+    fill = "gray90", color = "white"
+  ) +
+
+  geom_point(
+    data = filtered_data, 
+    aes(x = Begin_Lon, y = Begin_Lat, color = EventType), 
+    alpha = 0.7, size = 2
+  ) +
+  labs(
+    title = "Disaster Locations in the U.S.",
+    x = "Longitude", 
+    y = "Latitude",
+    color = "Event Type"
+  ) +
+  theme_minimal()
+```
+
+
+
+### Use cor.test function to assess the relationship between two variables, and test the significance
+
+```{r}
+frequency_data <- filtered_data %>%
+  group_by(Temperature, State, EventType) %>%
+  summarize(Event_Count = n(), .groups = "drop")
+
+head(frequency_data)
+```
+
+### The p-value is so small. We reject null hypothesis, there is no correlation between temperature and event frequency.
+```{r}
+cor.test(frequency_data$Temperature, frequency_data$Event_Count)
+```
+
+## Summary:
+The analysis supports that higher temperatures do not result in more frequent natural disaster. Florida has warmer climate with higher average temperatures compared to New York, but in year 2023, New York experienced more floods(11,808 events) than Florida (7,152 events). Temperature may be one influencing factor, but flood frequency appears to be determined by a combination of climatic and environmental factors.
+
+### Challenges:
+This project was particularly challenging for me because it required merging two separate NOAA CSV files and merging them with the NASA API dataset. Additionally, creating a map plot to visualize the data was a new and complex task that pushed me to learn and apply new skills.
+
+
