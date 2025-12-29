@@ -1,0 +1,197 @@
+---
+title: "Story - 1 : Infrastructure Investment and Jobs Act Funding Allocation"
+author: "Jiaxin Zheng"
+date: "2025-02-15"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+## President Joe Biden signed the Infrastructure Investment and Jobs Act Act(IIJA) on November 12, 2021. This Act invests $1 trillion to fix our nation's infrastructure like roads, bridges, and public transit, and also helps to create over 2 million jobs over the next decade. However, several important questions remain:
+-Is the allocation equitable based on the population of each of the States and Territories, or is bias apparent?
+-Does the allocation favor the political interests of the Biden administration?
+
+
+### First: We need to prepare for the data:
+1.IIJA Funding as of March 2023
+2.State Population in 2023
+3.Election 2022
+```{r}
+# load the library
+library(tidyverse)
+```
+
+
+```{r}
+# Read IIJA FUNDING AS OF MARCH 2023 CSV file
+funding <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Data-608_Story_1/refs/heads/main/IIJA%20FUNDING%20AS%20OF%20MARCH%202023.csv")
+head(funding)
+```
+
+```{r}
+# Rename the columns
+colnames(funding) <- c("State", "Total_Billions")
+head(funding)
+```
+
+```{r}
+# Read Population by State 2023 CSV file
+population <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Data-608_Story_1/refs/heads/main/Population_2020_2023.csv")
+head(population)
+```
+
+```{r}
+colnames(population) <- c("State", "April_2020_Estimates_Base", "2020", "2021", "2022", "2023")
+
+# Keep only "State" and "2023" population columns
+population_cleaned <- population %>%
+  select(State, `2023`) %>%
+  drop_na(State)
+
+print(population_cleaned)
+```
+
+```{r}
+# Remove the not necessary rows
+population_cleaned <- population_cleaned [-c(1,2,3,4,5,6,7,8,60,62,63,64,65,66,67),]
+population_cleaned$State <- gsub("^\\.", "", population_cleaned$State)
+```
+
+```{r}
+print(population_cleaned)
+```
+
+
+```{r}
+# Read Elections2020 CSV file
+elections <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Data-608_Story_1/refs/heads/main/Elections_result_2022.csv")
+head(elections)
+```
+
+```{r}
+# Select the necessary columns 
+elections_result <- elections %>% select(state, trump_win, biden_win)
+colnames(elections_result) <- c("State", "Trump_Win","Biden_Win")
+print(elections_result)
+```
+
+```{r}
+# Fix known mismatches, and fix the misspelled
+population_cleaned$State[population_cleaned$State == "DISTRICT OF COLUMBIA"] <- "WASHINGTON D.C."
+funding$State[funding$State == "DELEWARE"] <- "DELAWARE"
+```
+
+```{r}
+# Standardize states in all data
+funding_cleaned <- funding %>%
+  mutate(State = toupper(trimws(State)))
+
+population_cleaned <- population_cleaned %>%
+  mutate(State = toupper(trimws(State)))
+
+elections_cleaned <- elections_result %>%
+  mutate(State = toupper(trimws(State)))
+
+```
+
+
+```{r}
+# Merge all three data in to one data
+merged_data <- funding_cleaned %>%
+  left_join(population_cleaned, by = "State") %>%
+  left_join(elections_cleaned, by = "State")
+
+head(merged_data)
+```
+
+```{r}
+# Remove the NA
+final_df <- merged_data %>%
+  drop_na()
+
+print(final_df)
+```
+
+```{r}
+# Rename the columns 
+final_df <- final_df %>%
+  rename(Population = `2023`)
+
+print(final_df)
+```
+
+
+```{r}
+# Convert Population column to numeric
+final_df$Population <- as.numeric(gsub(",", "", final_df$Population))
+
+# Calculate per capita funding
+final_df <- final_df %>%
+  mutate(Per_Capita_Funding = (Total_Billions * 1e9) / Population)
+
+head(final_df)
+```
+
+### First, I calculate the per capita funding for each state. Alaska, Wyoming, and Montana are the top three states that have the most funding.
+```{r}
+ggplot(final_df, aes(y = reorder(State, Per_Capita_Funding), 
+                       x = Per_Capita_Funding)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "IIJA Per Capita Funding by State",
+       x = "Funding Per Capita ($)",
+       y = "State") +
+  theme_classic() +
+  theme(axis.text.y = element_text(size = 6))  # Reduce font size of state names
+
+```
+
+### Next, I calculated the funding by party, there are 53.8% funding goes to Democrat, and 46.2% funding goes to Republican. It seems biased that Democrat got more funding than Republican.
+
+```{r}
+final_df$Party <- ifelse(final_df$Biden_Win == 1, "Democrat", 
+                           ifelse(final_df$Trump_Win == 1, "Republican", "NA"))
+```
+
+```{r}
+party_funding <- final_df %>%
+  group_by(Party) %>%
+  summarise(Total_Funding = sum(Total_Billions)) %>%
+  mutate(Percentage = round((Total_Funding / sum(Total_Funding)) * 100, 1))  # Convert to percentage
+
+```
+
+```{r}
+ggplot(party_funding, aes(x = Party, y = Percentage, fill = Party)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(Percentage, "%")), vjust = -0.5, size = 3) +  # Add percentage labels
+  scale_fill_manual(values = c("Democrat" = "blue", "Republican" = "red", "NA" = "gray")) +
+  labs(title = "Funding Per Party",
+       x = "Political Party",
+       y = "Percentage of Total Allocations",
+       fill = "Party") +
+  theme_classic()
+
+```
+
+
+### Last, I plot the bar chart showing what party each state is below and how much funding they got. The top three states are all Republican.
+```{r}
+final_df$Election_Result <- ifelse(final_df$Biden_Win == 1, "Biden", "Trump")
+
+```
+
+```{r}
+ggplot(final_df, aes(y = reorder(State, Per_Capita_Funding), 
+                       x = Per_Capita_Funding, 
+                       fill = Election_Result)) +
+  geom_bar(stat = "identity") +
+  labs(title = "USA Per Capita Funding as of March 2023",
+       x = "Per Capita Funding (Dollars)",
+       y = "State",
+       fill = "Elected Candidate 2020") +
+  scale_fill_manual(values = c("Biden" = "blue", "Trump" = "red")) +
+  theme_classic()+
+  theme(axis.text.y = element_text(size = 6))
+```
+
+### Conclusions: Based on the graphs, it does not seem like there is an equitable distribution of funds for each state. While there are disparities exist, but our analysis suggests that the IIJA funding is driven more by state size, small and less populated states received higher funding. There is no clear partisan bias. 

@@ -1,0 +1,177 @@
+---
+title: "Story2_Can the FED Control Inflation and Maintain Full Employment"
+author: "Jiaxin Zheng"
+format: revealjs
+editor: visual
+---
+
+### **The Federal Reserve's Challenge: Balancing Inflation & Employment**
+
+The **Federal Reserve** is responsible for keeping the U.S. economy stable by managing **inflation** and **unemployment**. But can it truly achieve both at the same time?
+
+```{r}
+#| label: load-packages
+#| warning: false
+#| message: false
+
+# Load libraries
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+
+# Read the csv files
+FEDFUNDS <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Story2/refs/heads/main/FEDFUNDS.csv")
+
+UNRATE <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Story2/refs/heads/main/UNRATE.csv")
+
+CPI_ALL <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Story2/refs/heads/main/CPI_All%20Urban%20Consumers.csv", skip = 11)
+
+```
+
+```{r}
+# Rename columns
+colnames(FEDFUNDS) <- c("Date", "Fed_Funds_Rate")
+colnames(UNRATE) <- c("Date", "Unemployment_Rate")
+colnames(CPI_ALL)[1] <- "Year"
+
+# Convert Date columns to Date format
+FEDFUNDS$Date <- as.Date(FEDFUNDS$Date)
+UNRATE$Date <- as.Date(UNRATE$Date)
+
+```
+
+```{r}
+# From wide to long format
+CPI_ALL_long <- CPI_ALL %>%
+  pivot_longer(cols = -Year, names_to = "Month", values_to = "CPI_All")
+```
+
+```{r}
+# Convert Month names to month numbers
+CPI_ALL_long$Year <- as.numeric(CPI_ALL_long$Year)
+
+CPI_ALL_long <- CPI_ALL_long %>%
+  mutate(Month = match(Month, month.abb)) %>%  # Convert months to number 
+  filter(!is.na(Month)) # fillter the na and month
+```
+
+```{r}
+# Create a Date column
+CPI_ALL_long <- CPI_ALL_long %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+```
+
+```{r}
+# Convert CPI to numeric
+CPI_ALL_long$CPI_All <- as.numeric(CPI_ALL_long$CPI_All)
+
+# Calculate Inflation Rate
+CPI_ALL_long <- CPI_ALL_long %>%
+  arrange(Date) %>%
+  mutate(Inflation_Rate = (CPI_All / lag(CPI_All, 12) - 1) * 100)
+```
+
+```{r}
+# Merge datasets by Date
+data_merged <- CPI_ALL_long %>%
+  inner_join(UNRATE, by = "Date") %>%
+  inner_join(FEDFUNDS, by = "Date")
+```
+
+## The Fed's Tool as the Economy's Steering Wheel: Interest Rates
+
+In the graphic blue line(Inflation Rate) rises and falls over times, while the red dash line(Fed Funds Rate) represents the Fed's response.
+
+How the Fed control the "steering wheel"? Generally Inflation spikes first \~ Fed raises interest rates \~Inflation eventually comes down. but the Fed Funds Rate does not move instantly with inflation; there is usually a delay.
+
+2020 COVID-19 was Crisis Exception: The Fed Funds Rate dropped to near 0% during COVID-19 (2020) to stimulate economic recovery.
+
+**Did the Fed succeed?**
+
+The Answer is YES, with a delay, but inflation comes under control.
+
+## Inflation Rate vs. Fed Funds Rate
+
+```{r}
+p1 <- ggplot(data_merged, aes(x = Date)) +
+  geom_line(aes(y = Inflation_Rate, color = "Inflation Rate"), size = 1) +
+  geom_line(aes(y = Fed_Funds_Rate, color = "Fed Funds Rate"), size = 1, linetype = "dashed") +  geom_vline(xintercept = as.Date("2008-09-01"), color="gray", linetype="dashed") +
+  annotate("text", x = as.Date("2009-01-01"), y = 10, label = "Market Recession", size = 3) +
+
+  geom_vline(xintercept = as.Date("2020-03-01"), color="gray", linetype="dashed") +
+  annotate("text", x = as.Date("2020-06-01"), y = 10, label = "COVID Recession", size = 3) +
+  labs(title = "Inflation Rate vs. Fed Funds Rate",
+       x = "Year",
+       y = "Rate (%)",
+       color = "Legend") +
+  theme_bw()
+
+p1
+```
+
+## The Cost of Fighting Inflation is Rising Unemployment?
+
+In the graphic:
+
+1.  During 2008 Financial Crisis: Unemployment rose past 10%, forcing the Fed to slash rates to near 0%
+2.  2020 Covid: The pandemic caused massive job losses almost overnight. The Fed cut rates to 0% to quickly recovered the unemployment rate.
+
+**Did the Fed succeed?**
+
+Yes, but with consequences: rate hikes help fight inflation, but they can lead to recessions.
+
+## Unemployment Rate vs. Fed Funds Rate
+
+```{r}
+p2 <- ggplot(data_merged, aes(x = Date)) +
+  geom_line(aes(y = Unemployment_Rate, color = "Unemployment Rate"), size = 1) +
+  geom_line(aes(y = Fed_Funds_Rate, color = "Fed Funds Rate"), size = 1, linetype = "dashed") +  
+  geom_vline(xintercept = as.Date("2008-09-01"), color="gray", linetype="dashed") +
+  annotate("text", x = as.Date("2009-01-01"), y = 10, label = "Market Recession", size = 3) +
+
+  geom_vline(xintercept = as.Date("2020-03-01"), color="gray", linetype="dashed") +
+  annotate("text", x = as.Date("2020-06-01"), y = 10, label = "COVID Recession", size = 3) +
+  labs(title = "Unemployment Rate vs. Fed Funds Rate",
+       x = "Year", y = "Rate (%)", color = "Legend") +
+  theme_bw()
+
+p2
+```
+
+## Inflation Rate vs. Unemployment Rate vs. Fed Funds Rate (1990 - 2025)
+
+```{r}
+p3 <- ggplot(data_merged, aes(x = Date)) +
+  geom_line(aes(y = Inflation_Rate, color = "Inflation Rate"), size = 1) +
+  geom_line(aes(y = Unemployment_Rate, color = "Unemployment Rate"), size = 1) +
+  geom_line(aes(y = Fed_Funds_Rate, color = "Fed Funds Rate"), size = 1, linetype = "dashed") +
+
+  # Add annotations for major recessions with smaller text size
+  geom_vline(xintercept = as.Date("2008-09-01"), color="gray", linetype="dashed") +
+  annotate("text", x = as.Date("2009-01-01"), y = 10, label = "Market Recession", size = 3) +
+
+  geom_vline(xintercept = as.Date("2020-03-01"), color="gray", linetype="dashed") +
+  annotate("text", x = as.Date("2020-06-01"), y = 10, label = "COVID Recession", size = 3) +
+
+  # Labels and theme
+  labs(title = "Inflation Rate vs. Unemployment Rate vs. Fed Funds Rate (1990 - 2025)",
+       x = "Year",
+       y = "Percentage Change (%)",
+       color = "Legend") +
+  theme_bw()
+
+p3
+```
+
+## Conclusion:
+
+This creates a painful cycle:
+
+1.  Keep rates low \~ inflation gets worse but people stay employed.
+2.  Raise rates \~ inflation falls, but people lose jobs.
+
+**Did the Fed succeed?**
+
+Yes, the Fed has been effective, but its slow reaction time causes economic pain. And in recent global recessions, the Fed determined to restore the rate of economic change back to baseline after sharp economic recoveries.
