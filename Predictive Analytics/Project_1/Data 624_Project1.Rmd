@@ -1,0 +1,516 @@
+---
+title: "Data 624_Project 1"
+author: "Jiaxin Zheng"
+date: "2025-04-05"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Part A
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##### Download the library and load the data 
+```{r}
+library(fpp3)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+library(lubridate)
+library(gridExtra)
+library(tsibble)
+library(readr)
+library(openxlsx)
+```
+
+```{r}
+atm_data <- read.csv ('https://raw.githubusercontent.com/Jennyjjxxzz/Data-624_Project1/refs/heads/main/ATM624Data.csv')
+
+head(atm_data)
+```
+
+##### Transfer into tsibble dataframe
+```{r}
+atm_data <- atm_data %>% 
+  mutate(DATE = mdy_hms(DATE), 
+         DATE = as.Date(DATE)) %>% 
+  as_tsibble(index = DATE, key = ATM) %>% 
+  arrange(DATE)
+
+head(atm_data)
+```
+
+
+##### Find the missing value from the data.
+```{r}
+atm_data %>% 
+  filter(is.na(Cash)) 
+```
+
+##### Fillter and find out how many missing data for ATMs
+```{r}
+atm_data %>% 
+  filter_index(~'2010-4-30') %>% 
+  filter(is.na(Cash))
+```
+
+##### Impute the missing values with the means.
+
+```{r}
+atm_df <- atm_data %>%
+  filter_index(~'2010-04-30') %>%     # Only use data up to April 30, 2010
+  fill_gaps() %>%
+  filter(!is.na(ATM)) %>%
+  group_by(ATM) %>%
+  mutate(Cash = if_else(
+    is.na(Cash),
+    round(mean(Cash, na.rm = TRUE), 0),
+    Cash
+  )) %>%
+  ungroup()
+```
+
+```{r}
+head(atm_df)
+```
+
+- Double check for missing values
+```{r}
+sum(is.na(atm_df$Cash)) 
+```
+
+
+##### Autoplot the atm_data, for better understing for the dataset
+- There are outliers for ATM3 and ATM4
+
+```{r}
+atm_df %>% 
+  autoplot(Cash) + 
+  facet_wrap(~ATM, scale='free_y') +
+  ggtitle('ATM Withdrawal for Four ATMs')
+```
+
+- In the Boxplot, we can see there are some outlier in ATM1 too.
+
+```{r}
+plot <- atm_df %>%
+  ggplot(aes(x = Cash)) +
+  geom_boxplot(aes(fill = ATM)) +
+  facet_wrap(~ATM, nrow = 1, scales = "free_x") +
+  labs(
+    title = "Boxplots of ATM Cash Withdrawals",
+    y = "",
+    x = "Cash (Hundreds of $)"
+  )
+plot
+```
+
+
+#### Fillting the ATMs into the models(ETS, ARIMA, Naive) to see the RMSE
+- As a result, we can see that ARIMA is the best model to use for forecasting for all the ATMs because ARIMA has the lowest RMSE.
+
+```{r}
+atm_fit_all <- atm_df %>%
+  model(
+    ETS = ETS(Cash),
+    ARIMA = ARIMA(Cash, stepwise = FALSE),
+    Naive = NAIVE(Cash),
+    snaive = SNAIVE(Cash)
+  )
+
+accuracy_results <- atm_fit_all %>%
+  accuracy() %>%
+  arrange(ATM, RMSE)
+
+accuracy_results
+
+```
+
+
+- Plot to see the ACF and PACF plots
+```{r}
+atm_df %>%
+  filter(ATM == "ATM1") %>%
+  gg_tsdisplay(Cash, plot_type = 'partial', lag = 30) +
+  labs(title = "ATM1 - Time Series, ACF, PACF")
+
+atm_df %>%
+  filter(ATM == "ATM2") %>%
+  gg_tsdisplay(Cash, plot_type = 'partial', lag = 30) +
+  labs(title = "ATM2 - Time Series, ACF, PACF")
+
+atm_df %>%
+  filter(ATM == "ATM3") %>%
+  gg_tsdisplay(Cash, plot_type = 'partial', lag = 30) +
+  labs(title = "ATM3 - Time Series, ACF, PACF")
+
+atm_df %>%
+  filter(ATM == "ATM4") %>%
+  gg_tsdisplay(Cash, plot_type = 'partial', lag = 30) +
+  labs(title = "ATM4 - Time Series, ACF, PACF")
+
+```
+###### Plotting the forecasted data
+
+```{r}
+atm_fit <- atm_df %>%
+  model(auto_arima = ARIMA(Cash, stepwise = FALSE))
+
+atm_fc <- atm_fit %>%
+  forecast(h = "30 days")
+
+atm_fc %>%
+  filter(.model == "auto_arima") %>%
+  autoplot(atm_df) +
+  labs(title = "30-Day Forecast using ARIMA",
+       y = "Cash (hundreds)", x = "Date") +
+  facet_wrap(~ATM, scales = "free_y")
+
+```
+
+###### Analysis- Ljung-Box Test:
+- The p- value is > 0.05, that means ARIMA model works well for forecasting. 
+```{r}
+ljung_box_results <- atm_fit %>%
+  select(auto_arima) %>%
+  augment() %>%
+  features(.innov, ljung_box, lag = 10, dof = 3)
+
+ljung_box_results
+```
+```{r}
+# Filter forecasts from May 1, 2010
+atm_export <- atm_fc %>%
+  filter(.model == "auto_arima", DATE >= as.Date("2010-05-01")) %>%
+  as_tibble() %>%
+  select(ATM, DATE, Forecast = .mean)
+
+# Create workbook and worksheet
+wb <- createWorkbook()
+addWorksheet(wb, "ATM Forecasts")
+writeData(wb, sheet = "ATM Forecasts", atm_export)
+
+# Save the Excel file
+saveWorkbook(wb, "ATM_PartA_30Day_ARIMA_Forecast.xlsx", overwrite = TRUE)
+
+```
+
+###### Conclusion for part A:
+- In part A's analysis, I explored time series forecasting for four different ATMs using cash withdrawal data up to April 30, 2010. 
+- In the beginning, I prepossessing the data with identifying and imputing five missing values.
+- To identify the best forecasting model, I fitted the four models(ETS, Auto ARIME, Naive, and Seasonal Naive) for each ATM. Then, I selected the ARIMA model for all the ATMs for forecast, because ARIMA has lower RMSE than other models.
+- Finally, I use residual diagnostics and ljung- box for testing. And the model was satisfied. 
+
+
+
+## Part B
+
+##### Load the data 
+```{r}
+power_data <- read.csv ('https://raw.githubusercontent.com/Jennyjjxxzz/Data-624_Project1/refs/heads/main/ResidentialCustomerForecastLoad-624.csv')
+
+head(power_data)
+```
+- Convert dataframe to tsibble
+```{r}
+power_data <- power_data %>%
+  mutate(Date = yearmonth(YYYY.MMM)) %>%
+  as_tsibble(index = Date)
+```
+
+
+##### Check for the missing values. 
+
+```{r}
+# There is 1 missing value
+sum(is.na(power_data))
+```
+
+```{r}
+power_data %>% filter(if_any(everything(), is.na))
+```
+
+```{r}
+# Impute the missing value with the mean KWH
+power_data <- power_data %>%
+  mutate(KWH = if_else(
+    is.na(KWH),
+    round(mean(KWH, na.rm = TRUE)),
+    KWH
+  ))
+
+```
+
+```{r}
+# Check the missing value again
+sum(is.na(power_data))
+```
+```{r}
+# double check the missing value in the row of 861
+power_data %>% 
+  filter(CaseSequence==861)
+```
+
+##### Plot the Monthly Residential Power Usage
+
+```{r}
+power_data %>%
+  autoplot(KWH) +
+  labs(
+    title = "Monthly Residential Power Usage (KWH)",
+    y = "Kilowatt Hours", x = "Date"
+  )
+```
+
+##### Plot the Time series, ACF, and PACF(use difference() if need)
+```{r}
+power_data %>%
+  gg_tsdisplay(KWH, plot_type='partial') +
+  labs(title = "Before Transformation, Residential Power Usage")
+```
+##### Fit and compare each model
+
+- ARIMA model is the best model compare with others, because it has less RMSE.
+```{r}
+lambda <- power_data %>%
+  features(KWH, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+power_fit_original <- power_data %>%
+  model(
+    ARIMA = ARIMA(KWH),
+    ETS = ETS(KWH),
+    SNaive = SNAIVE(KWH)
+  )
+
+accuracy_results_original <- power_fit_original %>%
+  accuracy() %>%
+  arrange(RMSE)
+
+accuracy_results_original
+
+```
+
+
+```{r}
+
+power_fit_summary <- power_fit_original %>%
+  pivot_longer(everything(),
+               names_to = "model",
+               values_to = "order")
+
+print(power_fit_summary)
+```
+
+
+```{r}
+# Using Box-cox transfer the data
+lambda <- power_data %>%
+  features(KWH, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+power_data <- power_data %>%
+  mutate(KWH_trans_diff = difference(box_cox(KWH, lambda)))
+
+power_data %>%
+  gg_tsdisplay(KWH_trans_diff, plot_type = "partial", lag = 12) +
+  ggtitle("Box-Cox Transformed and Differenced KWH")
+
+```
+
+
+##### Forecast of power usage by using ARIMA model for 12 months
+
+```{r}
+power_arima_fit <- power_data %>%
+  model(ARIMA = ARIMA(KWH))
+
+power_arima_fc <- power_arima_fit %>%
+  forecast(h = "12 months")
+
+power_arima_fc %>%
+  autoplot(power_data) +
+  labs(
+    title = "Forecast of Residential Power Usage",
+    y = "KWH",
+    x = "Date"
+  )
+
+```
+
+
+```{r}
+report(power_arima_fit)
+```
+- The model works well, the P-values are > 0.05
+```{r}
+power_arima_fit %>%
+  augment() %>%
+  features(.innov, ljung_box, lag = 10, dof = 2)
+
+```
+
+```{r}
+# convert to data frame
+power_export <- power_arima_fc %>%
+  filter(year(Date) == 2014) %>%
+  as_tibble() %>%
+  select(Date, Forecast = .mean)
+
+# Create a new Excel workbook and add sheet
+wb <- createWorkbook()
+addWorksheet(wb, "Power Forecast 2014")
+writeData(wb, sheet = "Power Forecast 2014", power_export)
+
+# Save Excel file
+saveWorkbook(wb, "PartB_Power_Forecast_2014.xlsx", overwrite = TRUE)
+```
+
+
+###### Conclusion for part B:
+- In part B's analysis, I analyzed the monthly residential power data from January 1988 to December 2013, and forecasted the usage for the year of 2014. The original data show the data is non-stationary. To stabilize, I applied the Box-cox transformation. I evaluated the models, and ARIMA is the best model for this data. At the end, I used ljung- box for the test,and the model was satisfied. 
+
+
+### Part C – BONUS
+
+##### Load the datas 
+```{r}
+pipe1 <- read.csv ('https://raw.githubusercontent.com/Jennyjjxxzz/Data-624_Project1/refs/heads/main/Waterflow_Pipe1.csv')
+
+pipe2 <- read.csv ('https://raw.githubusercontent.com/Jennyjjxxzz/Data-624_Project1/refs/heads/main/Waterflow_Pipe2.csv')
+```
+
+```{r}
+str(pipe1)
+
+```
+
+```{r}
+str(pipe2)
+```
+
+##### Aggregate Data
+- Transform the Date.Time columns to actual date types.
+```{r}
+pipe1 <- pipe1 %>% 
+  mutate(Date.Time = as.POSIXct(Date.Time, format = "%m/%d/%y %I:%M %p"))
+
+pipe2 <- pipe2 %>% 
+  mutate(Date.Time = as.POSIXct(Date.Time, format = "%m/%d/%y %I:%M %p"))
+```
+
+
+##### To combine the two data into one:
+
+```{r}
+pipe_df<- rbind(pipe1, pipe2)
+
+head(pipe_df)
+```
+
+##### Check for missing values in data
+
+```{r}
+pipe_df %>% filter(if_any(everything(), is.na))
+```
+- Now take an average for each hour.
+```{r}
+pipe_df <- pipe_df %>% 
+  mutate(Date.Time = floor_date(Date.Time, "hour")) %>% 
+  group_by(Date.Time) %>% 
+  summarize(avg_flow = mean(WaterFlow, na.rm=T)) %>% 
+  as_tsibble(index=Date.Time)
+
+head(pipe_df)
+```
+
+- Plot the data 
+
+```{r}
+pipe_df %>% 
+  autoplot(avg_flow) + 
+  ggtitle('Average waterflow vs Date.hour')
+```
+
+
+- We can see in ACF plots, the data is non-stationary, so we have to transfer
+```{r}
+pipe_df %>% 
+  gg_tsdisplay(avg_flow, plot_type = 'partial', lag = 24)+ggtitle('Before Transfer')
+```
+
+##### Transfer the data 
+
+```{r}
+#find lambad
+lambad_pipe <- pipe_df %>% 
+  features(avg_flow, features = guerrero) %>% 
+  pull (lambda_guerrero)
+
+#find ndiffs 
+pipe_df  %>%
+  mutate(avg_flow = box_cox(avg_flow, lambad_pipe)) %>%
+  features(avg_flow, unitroot_ndiffs)
+```
+
+```{r}
+pipe_df %>%
+  gg_tsdisplay(difference(box_cox(avg_flow,lambda = lambad_pipe)), plot_type='partial', lag = 24) +
+  labs(title = paste("Differenced average waterflow"))
+```
+
+##### Forecast the data
+
+```{r}
+
+pipe_fit_arima <- pipe_df %>%
+  model(ARIMA = ARIMA(box_cox(avg_flow, lambda = lambad_pipe)))
+
+```
+
+```{r}
+pipe_forecast_arima <- pipe_fit_arima %>%
+  forecast(h = "168 hours") # a week
+
+pipe_forecast_arima %>%
+  autoplot(pipe_df) +
+  labs(
+    title = "1-Week Forecast of Average Water Flow (ARIMA with Box-Cox)",
+    x = "Time (Hourly)",
+    y = "Average Flow"
+  )
+
+```
+
+- The p- value > 0.05
+```{r}
+ljung_box_pipe <- pipe_fit_arima %>%
+  augment() %>%
+  features(.innov, ljung_box, lag = 24, dof = 2)
+
+ljung_box_pipe
+
+```
+
+```{r}
+pipe_export <- pipe_forecast_arima %>%
+  as_tibble() %>%
+  select(DateTime = Date.Time, Forecast = .mean)
+
+# Create a new workbook and write to Excel
+wb <- createWorkbook()
+addWorksheet(wb, "Pipe Forecast")
+writeData(wb, sheet = "Pipe Forecast", pipe_export)
+
+# Save the Excel file for Part C
+saveWorkbook(wb, "PartC_Pipe1_1Week_Forecast.xlsx", overwrite = TRUE)
+
+```
+
+
+###### Conclusion for part C:
+- In the part C, I worked with two data sets, and combined as one. They representing water flow rates at different timestaps for two different pipelines. The goal is to forecast waterflow one week ahead. In this data, the data is non- stationary, and I use box-cox to transfer the data. I selected the ARIMA model for final forecasting. Finally, I use Ljung- Box for test, and the result show the model ARIMA works well, the residual resembled white noise. 
+
+

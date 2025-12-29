@@ -1,0 +1,490 @@
+---
+title: "Data 624_Exercise 9.11_HW6"
+author: "Jiaxin Zheng"
+date: "2025-04-04"
+output:
+  html_document: default
+  pdf_document:     
+    latex_engine: xelatex
+---
+
+# 9.11 Exercises:
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(fpp3)
+library(dplyr)
+```
+## 1. Figure 9.32 shows the ACFs for 36 random numbers, 360 random numbers and 1,000 random numbers. 
+- a.Explain the differences among these figures. Do they all indicate that the data are white noise?
+
+- Answer: It looks like all the plots, the spikes are all within the blueline. ALl of the ACF plots indicate the data is white noise.
+
+- b.Why are the critical values at different distances from the mean of zero? Why are the autocorrelations different in each figure when they each refer to white noise? 
+
+- Answer: As the sample size increase the critical values are more precise. The sample size progresses from 36, 360 to 1,000, the critical values approach to zero.
+
+## 2. A classic example of a non-stationary series are stock prices. Plot the daily closing prices for Amazon stock (contained in gafa_stock), along with the ACF and PACF. Explain how each plot shows that the series is non-stationary and should be differenced.
+
+- Answer:The data is not stationary and plenty of variation. I make the difference plot for the daily closing prices for Amazon. Both ACF and PACF shoes many spikes, and the data is not white noise.
+```{r}
+amazon <- gafa_stock %>% 
+  filter(Symbol == "AMZN") 
+
+amazon %>% 
+  gg_tsdisplay(Close, plot_type = 'partial')
+```
+
+
+```{r}
+amazon <- gafa_stock %>% 
+  filter(Symbol == "AMZN") 
+
+amazon %>% 
+  gg_tsdisplay(difference(Close), plot_type = 'partial')
+```
+
+
+## 3. For the following series, find an appropriate Box-Cox transformation and order of differencing in order to obtain stationary data.
+
+- a.Turkish GDP from global_economy.
+```{r}
+head(global_economy)
+```
+
+```{r}
+turkish_GDP <- global_economy %>% 
+  filter(Country == 'Turkey') 
+
+turkish_GDP %>% 
+  autoplot(GDP) +
+  labs(title = "Turkish GDP")
+```
+```{r}
+#Box-cox transform
+#find lambda value
+lambda_turkey <- turkish_GDP %>%
+  features(GDP, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#find ndiffs 
+turkish_GDP  %>%
+  mutate(GDP = box_cox(GDP, lambda_turkey)) %>%
+  features(GDP, unitroot_ndiffs)
+```
+```{r}
+turkish_GDP %>% 
+  gg_tsdisplay(difference(box_cox(GDP, lambda = lambda_turkey)),plot_type = 'partial', lag = 12)
+```
+
+
+- b.Accommodation takings in the state of Tasmania from aus_accommodation.
+
+```{r}
+head(aus_accommodation)
+```
+
+```{r}
+tasmania <- aus_accommodation %>% 
+  filter(State == 'Tasmania') 
+
+tasmania %>% 
+  autoplot(Takings) +
+  labs(title = "Accommodation takings in the state of Tasmania")
+```
+```{r}
+tasmania %>% 
+  gg_tsdisplay(Takings, plot_type = 'partial')
+```
+```{r}
+#Box-cox transform
+#find lambda value
+lambda_tasmania <- tasmania %>%
+  features(Takings, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#find ndiffs 
+tasmania  %>%
+  mutate(Takings = box_cox(Takings, lambda_tasmania)) %>%
+  features(Takings, unitroot_ndiffs)
+```
+
+```{r}
+tasmania %>% 
+  gg_tsdisplay(difference(box_cox(Takings, lambda_tasmania), 4),plot_type = 'partial', lag = 24) +
+  labs(title="Differenced Tasmania Accomodation Takings")
+```
+
+
+- c.Monthly sales from souvenirs.
+```{r}
+head(souvenirs)
+```
+
+```{r}
+souvenirs %>% 
+  autoplot(Sales) +
+  labs(title = "Monthly Souvenir Sales")
+```
+
+```{r}
+souvenirs %>% 
+  gg_tsdisplay(Sales, plot_type = 'partial')
+```
+
+```{r}
+#Box-cox transform
+#find lambda value
+lambda_tsouvenirs <- souvenirs %>%
+  features(Sales, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+#find ndiffs 
+souvenirs  %>%
+  mutate(Sales = box_cox(Sales, lambda_tasmania)) %>%
+  features(Sales, unitroot_ndiffs)
+```
+
+```{r}
+souvenirs %>% 
+  gg_tsdisplay(difference(box_cox(Sales, lambda_tsouvenirs), 12),plot_type = 'partial', lag = 36) +
+  labs(title="Differenced Monthly Souvenir Sales")
+```
+
+
+## 5.For your retail data (from Exercise 7 in Section 2.10), find the appropriate order of differencing (after transformation if necessary) to obtain stationary data.
+```{r}
+set.seed(12345678)
+myseries <- aus_retail %>% 
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+```
+
+- The plots shows no pastern, many spikes in acf plots, and now we have use box-cox to transfer.
+```{r}
+myseries %>% 
+  gg_tsdisplay(Turnover, plot_type = 'partial')+
+  labs (title = "Retail Turnover")
+```
+
+- box- cox transfer the data
+```{r}
+#find lambad
+lambad_myseries <- myseries %>% 
+  features(Turnover, features = guerrero) %>% 
+  pull (lambda_guerrero)
+
+#find ndiffs 
+myseries  %>%
+  mutate(Turnover = box_cox(Turnover, lambad_myseries)) %>%
+  features(Turnover, unitroot_ndiffs)
+```
+
+- We can see in the acf still have many spikes, and clearly non- stationary, so we need to use double differenced.
+```{r}
+myseries %>%
+  gg_tsdisplay(difference(box_cox(Turnover,lambda = lambad_myseries), 12), plot_type='partial', lag = 24) +
+  labs(title = paste("Differenced Retail Takeover"))
+```
+
+```{r}
+# Double differenced
+myseries %>%
+  gg_tsdisplay(difference(box_cox(Turnover,lambda = lambad_myseries), 12) %>% difference(), plot_type='partial', lag = 24) +
+  labs(title = paste("Double Differenced Retail Takeover"))
+```
+
+## 6.Simulate and plot some data from simple ARIMA models.
+- a.Use the following R code to generate data from an AR(1) model with ϕ1=0.6 and σ2=1. The process starts with y1=0.
+
+```{r}
+y <- numeric(100)
+
+e <- rnorm(100)
+
+for(i in 2:100)
+  y[i] <- 0.6*y[i-1] + e[i]
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+- b.Produce a time plot for the series. How does the plot change as you change ϕ1?
+
+- Answer: As ϕ1 increases or decreases, the pattern of the time series changes. Specifically, when ϕ1 is positive and closer to 1, the series shows smoother and more persistent trends, with longer "waves".  When ϕ1 is negative, the series tends is rapidly, resulting in shorter wavelengths and more frequent changes in direction.
+```{r}
+y <- numeric(100)
+
+e <- rnorm(100)
+
+for(i in 2:100)
+  y[i] <- 0.1*y[i-1] + e[i]
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+
+```{r}
+sim %>% 
+  autoplot(y) +
+  labs(title = "AR(1) model (Phi = 0.1)")
+```
+```{r}
+y <- numeric(100)
+
+e <- rnorm(100)
+
+for(i in 2:100)
+  y[i] <- 1*y[i-1] + e[i]
+sim <- tsibble(idx = seq_len(100), y = y, index = idx)
+
+sim %>% 
+  autoplot(y) +
+  labs(title = "AR(1) model (Phi = 1)")
+```
+
+- c.Write your own code to generate data from an MA(1) model with θ1=0.6 and σ2=1.
+
+```{r}
+y <- numeric(100)
+
+e <- rnorm(100)
+
+for(i in 2:100)
+  y[i] <- 0.6*e[i-1] + e[i]
+sim_ma <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+- d.Produce a time plot for the series. How does the plot change as you change θ1?
+- Answer: The idea is the same as Phi= 0.6.
+```{r}
+sim_ma %>% 
+  autoplot(y) +
+  labs(title = "MA(1) model (Theta = 0.6)")
+```
+
+- e.Generate data from an ARMA(1,1) model with ϕ1=0.6, θ1=0.6 and σ2=1.
+```{r}
+y <- numeric(100)
+
+e <- rnorm(100)
+
+for (i in 2:100){
+    y[i] <- (0.6 * y[i-1]) + (0.6 * e[i-1]) + e[i]
+}
+
+sim1 <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+
+- f.Generate data from an AR(2) model with ϕ1=−0.8, ϕ2=0.3 and σ2=1. (Note that these parameters will give a non-stationary series.)
+
+```{r}
+y <- numeric(100)
+
+e <- rnorm(100)
+
+for (i in 3:100){
+    y[i] <- (-0.8 * y[i-1]) + (0.3 * y[i-2]) + e[i]
+}
+
+sim2 <- tsibble(idx = seq_len(100), y = y, index = idx)
+```
+
+- g.Graph the latter two series and compare them.
+```{r}
+library(cowplot)
+
+plot1 <- sim1 %>% 
+  autoplot(y) +
+  labs(title = "ARMA(1,1)")
+
+plot2 <- sim2 %>% 
+  autoplot(y) +
+  labs(title = "AR(2)")
+
+plot_grid(plot1, plot2, ncol=1)
+```
+
+- AR(2) appears increases over time. 
+
+## 7.Consider aus_airpassengers, the total number of passengers (in millions) from Australian air carriers for the period 1970-2011.
+
+- a.Use ARIMA() to find an appropriate ARIMA model. What model was selected. Check that the residuals look like white noise. Plot forecasts for the next 10 periods.
+- Answer: ARIMA(0,2,1) has been select.
+```{r}
+head(aus_airpassengers)
+```
+
+```{r}
+fit <- aus_airpassengers |>
+  model(ARIMA(Passengers))
+
+report(fit)
+```
+```{r}
+# Plot for forecast for 10 years
+fit %>% 
+  forecast(h="10 years") %>%
+  autoplot(aus_airpassengers) +
+  labs(title = "10 Years Forecase for Australian Passenger with ARIMA(0,2,1)")
+```
+
+
+- b.Write the model in terms of the backshift operator.
+- Answer: (1−B)^2yt=(1+θ1B))ϵt
+
+- c.Plot forecasts from an ARIMA(0,1,0) model with drift and compare these to part a.
+- Answer: Can't really see the difference, the two forecasts are very similar with an increasing trend over the time.
+
+```{r}
+fit2 <-aus_airpassengers %>%
+  model(ARIMA(Passengers ~ 1 + pdq(0,1,0)))
+
+fit2 %>% 
+  forecast(h=10) %>%
+  autoplot(aus_airpassengers) +
+  labs(title = "10 Years Forecase for Australian Passenger with ARIMA(0,1,0)")
+```
+
+- d.Plot forecasts from an ARIMA(2,1,2) model with drift and compare these to parts a and c. Remove the constant and see what happens.
+- Answer: The result is similar. ARIMA(2,1,2) model can see the "wave" at the forecast part, ARIMA(2,1,2) is unable to forecast the non-stationary data.
+```{r}
+fit3 <-aus_airpassengers %>%
+  model(ARIMA(Passengers ~ 1 + pdq(2,1,2)))
+
+fit3 %>% 
+  forecast(h=10) %>%
+  autoplot(aus_airpassengers) +
+  labs(title = "10 Years Forecase for Australian Passenger with ARIMA(2,1,2)")
+```
+
+
+- e.Plot forecasts from an ARIMA(0,2,1) model with a constant. What happens?
+
+- Answer: This model forecast is with a drastic increase. This is generally discouraged.
+```{r}
+fit4 <-aus_airpassengers %>%
+  model(ARIMA(Passengers ~ 1 + pdq(0,2,1)))
+
+fit4 %>% 
+  forecast(h=10) %>%
+  autoplot(aus_airpassengers) +
+  labs(title = "10 Years Forecase for Australian Passenger with ARIMA(0,2,1)")
+```
+
+
+## 8.For the United States GDP series (from global_economy):
+
+- a.if necessary, find a suitable Box-Cox transformation for the data;
+- Answer: The P- value is 0 for this model, I think we need to use box-cox transformation the data.
+```{r}
+us <- global_economy %>% 
+  filter(Country == 'United States')%>% 
+  summarise(GDP= sum(GDP)/1e9)
+
+us %>% autoplot(GDP) +
+  labs(title = 'United States GDP')
+```
+
+```{r}
+us %>%  ACF(GDP) %>% 
+  autoplot() + labs(subtitle = "ACF of U.S. GDP")
+us %>%  ACF(difference(GDP)) %>% 
+  autoplot() + labs(subtitle = "Changes in of U.S. GDP")
+```
+
+
+```{r}
+us |>
+  mutate(GDP = difference(GDP)) |>
+  features(GDP, ljung_box, lag = 10)
+```
+
+
+```{r}
+#find lambad
+lambad_us <- us %>% 
+  features(GDP, features = guerrero) %>% 
+  pull (lambda_guerrero)
+
+us <- us %>% 
+  mutate(BoxCox_GDP = box_cox(GDP, lambad_us))
+
+us_plot2 <- us |>
+  autoplot(BoxCox_GDP) +
+  labs(title = "United States GDP BoxCox")
+
+us_plot2
+```
+
+
+- b.fit a suitable ARIMA model to the transformed data using ARIMA();
+
+```{r}
+us_fit <- us|>
+  model(ARIMA(box_cox(GDP, lambad_us)))
+
+report(us_fit)
+```
+- c.try some other plausible models by experimenting with the orders chosen;
+```{r}
+us_fit2 <- us %>%
+  model(ARIMA(box_cox(GDP, lambad_us) ~ pdq(2,1,1)))
+
+report(us_fit2)
+```
+```{r}
+us_fit3 <- us %>%
+  model(ARIMA(box_cox(GDP, lambad_us) ~ pdq(0,2,2)))
+
+report(us_fit3)
+```
+
+- d.choose what you think is the best model and check the residual diagnostics;
+```{r}
+us_fit3 %>% 
+  gg_tsresiduals()
+```
+
+- e.produce forecasts of your fitted model. Do the forecasts look reasonable?
+- It does look like reasonable, the trend going upward.
+
+```{r}
+fc <- us_fit3 %>% 
+  forecast(h="10 years") 
+
+fc |>
+  autoplot(us) +
+  labs("10 Year United States GDP Prediction")
+```
+
+
+- f.compare the results with what you would obtain using ETS() (with no transformation).
+- The ARIMA model with box-cox transformation has lower RMSE value than others, that means the model is better than others..
+
+```{r}
+us_fit <- us |>
+  model(ETS(GDP))
+
+report(us_fit)
+```
+
+```{r}
+fc <- us_fit |>
+  forecast(h="10 years")
+
+fc |>
+  autoplot(us)
+```
+
+```{r}
+accuracy(us_fit)
+```
+
+```{r}
+accuracy(us_fit2)
+```
+
+```{r}
+accuracy(us_fit3)
+```
+

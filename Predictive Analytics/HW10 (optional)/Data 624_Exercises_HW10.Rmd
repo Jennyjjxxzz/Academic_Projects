@@ -1,0 +1,135 @@
+---
+title: "Data 624_Exercise_HW10"
+author: "Jiaxin Zheng"
+date: "2025-05-17"
+output: html_document
+---
+
+### Imagine 10000 receipts sitting on your table. Each receipt represents a transaction with items that were purchased. The receipt is a representation of stuff that went into a customer’s basket - and therefore ‘Market Basket Analysis’. That is exactly what the Groceries Data Set contains: a collection of receipts with each line representing 1 receipt and the items purchased. Each line is called a transaction and each column in a row represents an item.  The data set is attached. Your assignment is to use R to mine the data for association rules. You should report support, confidence and lift and your top 10 rules by lift. 
+
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(arules)
+library(arulesViz)
+library(cluster)
+library(factoextra)
+library(tidyverse)
+library(ggplot2)
+library(tidytext)
+```
+
+
+```{r}
+df <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/Data-624_HW10/refs/heads/main/GroceryDataSet.csv", stringsAsFactors = FALSE)
+```
+
+```{r}
+# Convert each row to a transaction (remove NAs and blanks)
+transactions_list <- apply(df, 1, function(x) na.omit(x[x != ""]))
+transactions <- as(transactions_list, "transactions")
+
+summary(transactions)
+```
+
+
+
+
+```{r}
+# Mine rules using the Apriori algorithm
+rules <- apriori(transactions, parameter = list(supp = 0.001, conf = 0.5))
+# Sort
+top5_rules <- sort(rules, by = "lift", decreasing = TRUE)[1:5]
+
+# Show top 5 rules
+inspect(top5_rules)
+```
+
+#### Explore the Data for Top 20 items
+```{r}
+itemFrequencyPlot(transactions, topN = 20, type = "absolute", horiz = TRUE)
+```
+
+```{r}
+plot(rules[1:20], method = "graph", engine = "htmlwidget")
+
+```
+
+#### Elbow Plot for Optimal Clusters
+
+```{r}
+# Convert transactions to binary item matrix
+item_matrix <- as(transactions, "matrix")
+# Scale the martix
+scaled <- scale(item_matrix)
+
+# Compute total within-cluster sum of squares for k = 1 to 10
+wss <- map_dbl(1:10, ~kmeans(scaled, centers = ., nstart = 10)$tot.withinss)
+
+# Plot Elbow Plot
+tibble(k = 1:10, wss = wss) %>%
+  ggplot(aes(k, wss)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = 3, linetype = "dashed", color = "red") +
+  labs(title = "Elbow Plot for Optimal Clusters",
+       x = "Number of Clusters",
+       y = "Within-Cluster Sum of Squares") +
+  theme_minimal()
+```
+#### K-Means Clustering on Market Baskets
+
+```{r}
+set.seed(123)
+km_res <- kmeans(scaled, centers = 3, nstart = 25)
+
+fviz_cluster(km_res, data = scaled, geom = "point", ellipse.type = "convex") +
+  labs(title = "K-Means Clustering on Market Baskets")
+
+```
+
+#### Top 10 Most Sold Products per Cluster
+```{r}
+# Assign cluster labels
+cluster_assignments <- km_res$cluster
+
+# Convert transactions to a list and combine with cluster labels
+transaction_list <- as(transactions, "list")
+transaction_df <- tibble(
+  transaction_id = seq_along(transaction_list),
+  items = transaction_list,
+  cluster = cluster_assignments
+)
+
+# Unnest the items into long format
+exploded_items <- transaction_df %>%
+  unnest(items)
+
+# Count top 10 most frequent items in each cluster
+top_items_by_cluster <- exploded_items %>%
+  group_by(cluster, items) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(cluster, desc(count)) %>%
+  group_by(cluster) %>%
+  slice_head(n = 10)
+
+# Reorder items 
+top_items_by_cluster <- top_items_by_cluster %>%
+  mutate(items = reorder_within(items, count, cluster))
+
+# plot
+ggplot(top_items_by_cluster, aes(x = items, y = count, fill = as.factor(cluster))) +
+  geom_col(show.legend = FALSE) +
+  scale_x_reordered() +
+  facet_wrap(~ cluster, scales = "free_y") +
+  coord_flip() +
+  labs(
+    title = "Top 10 Most Sold Products per Cluster",
+    x = "Product",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+```
+

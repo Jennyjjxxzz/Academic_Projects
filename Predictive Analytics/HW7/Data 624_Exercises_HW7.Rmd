@@ -1,0 +1,259 @@
+---
+title: "Data 624_Exercise_HW7"
+author: "Jiaxin Zheng"
+date: "2025-04-06"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Kuhn and Johnson, Chapter 6
+### Exercise 6.2
+- Developing a model to predict permeability (see Sect. 1.4) could save significant resources for a pharmaceutical company, while at the same time more rapidly identifying molecules that have a sufficient permeability to become a drug:
+
+#### (a) Start R and use these commands to load the data:
+```{r}
+library(AppliedPredictiveModeling)
+library(tidyverse)
+library(glmnet)
+library(caret)
+```
+
+```{r}
+data(permeability)
+```
+
+- The matrix fingerprints contains the 1,107 binary molecular predictors for the 165 compounds, while permeability contains permeability response.
+
+#### (b) The fingerprint predictors indicate the presence or absence of substructures of a molecule and are often sparse meaning that relatively few of the molecules contain each substructure. Filter out the predictors that have low frequencies using the nearZeroVar function from the caret package. How many predictors are left for modeling?
+- Answer: there are 388 predictors are left for modeling.
+
+```{r}
+# Check for the structure of fingerprints
+dim(fingerprints)
+```
+```{r}
+# filter out near-zero variance predictors
+nzv <- nearZeroVar(fingerprints)
+
+# keep predictors
+filtered_fingerprints <- fingerprints[, -nzv]
+ncol(filtered_fingerprints)
+```
+#### (c) Split the data into a training and a test set, pre-process the data, and tune a PLS model. How many latent variables are optimal and what is the corresponding resampled estimate of R^2?
+
+- Answer: The final value used for the model was ncomp 9 and the R^2 is 0.5420556 
+
+```{r}
+
+set.seed(1234567)
+# Selecting 80% of data as sample
+train_index <- createDataPartition(permeability, p = 0.8, list=FALSE)
+X_train <- filtered_fingerprints[train_index, ]
+X_test  <- filtered_fingerprints[-train_index, ]
+
+y_train <- permeability[train_index,]
+y_test <- permeability[-train_index,]
+```
+
+
+```{r}
+set.seed(1234567)
+# Set up training control with 10-fold cross-validation
+ctrl <- trainControl(method = "cv", number = 10)
+
+# Train a PLS model
+pls_model <- train(
+  x = X_train,
+  y = y_train,
+  method = "pls",
+  preProcess = c("center", "scale"),
+  tuneLength = 20,
+  trControl = ctrl
+)
+
+print(pls_model)
+```
+
+#### (d) Predict the response for the test set. What is the test set estimate of R^2?
+- Answer: The test set estimate  R^2 is 0.5326435 
+
+```{r}
+# Predict permeability on X test
+predictions <- predict(pls_model, X_test)
+
+test_results <- postResample(predictions, y_test)
+
+test_results
+```
+#### (e) Try building other models discussed in this chapter. Do any have better predictive performance?
+- I tested Ridge model & Elastic Net.
+- R^2 for Ride model is 0.5819108, and RMSE is 10.3519819. 
+- Elastic Net's R^2 is 0.624194, RMSE is 9.2244272.  
+- PLS's R^2 is 0.5326435, RMSE is 11.4987267
+
+- I think Elastic Net model is better predictive performance.
+
+
+
+##### Ridge Model
+
+```{r}
+set.seed(100)
+ridge_model <- train(
+  x = X_train,
+  y = y_train,
+  method = "ridge",
+  preProcess = c("center", "scale"),
+  tuneLength = 20,
+  trControl = ctrl
+)
+
+print (ridge_model)
+```
+```{r}
+ridge_pred <- predict(ridge_model, X_test)
+ridge_r2 <- postResample(ridge_pred, y_test)
+
+ridge_r2
+```
+
+
+##### Elastic Net
+```{r}
+enetGrid <- expand.grid(.lambda = c(0, 0.01, .1),
+                        .fraction = seq(0.05, 1, length =20))
+set.seed(100)
+
+enetTune <- train(
+  x = X_train,
+  y = y_train,
+  method = "enet",
+  preProcess = c("center", "scale"),
+  tuneGrid = enetGrid,
+  trControl = ctrl
+)
+
+print(enetTune)
+```
+
+```{r}
+enet_pred <- predict(enetTune, X_test)
+enet_r2 <- postResample(enet_pred, y_test)
+
+enet_r2
+```
+### Exercise 6.3
+- A chemical manufacturing process for a pharmaceutical product was discussed in Sect. 1.4. In this problem, the objective is to understand the relationship between biological measurements of the raw materials (predictors), measurements of the manufacturing process (predictors), and the response of product yield. Biological predictors cannot be changed but can be used to assess the quality of the raw material before processing. On the other hand, manufacturing process predictors can be changed in the manufacturing process. Improving product yield by 1 % will boost revenue by approximately one hundred thousand dollars per batch:
+
+#### (a) Start R and use these commands to load the data:
+
+```{r}
+data("ChemicalManufacturingProcess")
+```
+
+The matrix processPredictors contains the 57 predictors (12 describing the input biological material and 45 describing the process predictors) for the 176 manufacturing runs. yield contains the percent yield for each run.
+
+#### (b) A small percentage of cells in the predictor set contain missing values. Use an imputation function to fill in these missing values (e.g., see Sect. 3.8).
+```{r}
+sum(is.na(ChemicalManufacturingProcess))
+```
+```{r}
+# Separate predictors and response
+predictors <- ChemicalManufacturingProcess[, -ncol(ChemicalManufacturingProcess)]
+response <- ChemicalManufacturingProcess$Yield
+
+# Impute missing values using knn imputation
+chem_pre <- preProcess(predictors, method = "knnImpute")
+chem_imputed_data <- predict(chem_pre, predictors)
+
+sum(is.na(chem_imputed_data))
+```
+#### (c) Split the data into a training and a test set, pre-process the data, and tune a model of your choice from this chapter. What is the optimal value of the performance metric?
+
+- The final value used for the model was ncomp = 3. R^2 is 0.11102077
+
+```{r}
+set.seed(1234567)
+
+Chem_train_index <- createDataPartition(response, p = 0.8, list = FALSE)
+
+X_train <- chem_imputed_data[Chem_train_index, ]
+X_test  <- chem_imputed_data[-Chem_train_index, ]
+
+y_train <- response[Chem_train_index]
+y_test  <- response[-Chem_train_index]
+
+ctrl <- trainControl(method = "cv", number = 10)
+```
+
+
+```{r}
+set.seed(1234567)
+pls_model2 <- train(
+  x = X_train,
+  y = y_train,
+  method = "pls",
+  preProcess = c("center", "scale"),
+  tuneLength = 20,
+  trControl = ctrl
+)
+
+print(pls_model2)
+```
+
+#### (d) Predict the response for the test set. What is the test set estimate of R^2?
+- RMSE is 0.11410910, and R^2 is 0.9961308
+
+```{r}
+# Predict on test set
+predictions2 <- predict(pls_model2, X_test)
+
+test_results2 <- postResample(predictions2, y_test)
+
+test_results2
+```
+
+#### (e) Which predictors are most important in the model you have trained? Do either the biological or process predictors dominate the list?
+
+```{r}
+list <- varImp(pls_model2)
+print(list)
+plot(list, top = 20) 
+
+```
+#### (f) Explore the relationships between each of the top predictors and the response. How could this information be helpful in improving yield in future runs of the manufacturing process?
+- It shows BiologicalMaterial01  & 06 have the strongest correlation among the manufacturing predictors at 0.95, and follow by ManufacturingProcess32 & 33 at 0.86
+
+```{r}
+library(corrplot)
+
+chem_data <- data.frame(chem_imputed_data, Yield = response)
+
+# Select the top predictors along with Yield.
+top_corr_vars <- chem_data[, c(
+  "Yield", 
+  "ManufacturingProcess32", "ManufacturingProcess36", "ManufacturingProcess13",
+  "ManufacturingProcess09", "ManufacturingProcess17", "ManufacturingProcess33",
+  "BiologicalMaterial02", "ManufacturingProcess12", "BiologicalMaterial06"
+)]
+
+# Compute the correlation matrix using pairwise complete observations.
+corr_matrix <- cor(top_corr_vars, use = "pairwise.complete.obs")
+
+
+corrplot.mixed(
+  corr_matrix,
+  upper = "number",
+  lower = "circle",
+  tl.pos = "lt",
+  tl.col = "black",
+  number.cex = 0.8,
+  tl.cex = 0.8,
+  lower.col = colorRampPalette(c("blue", "white", "red"))(200)
+)
+```
+
+
+
+

@@ -1,0 +1,782 @@
+---
+title: "DATA 624 Project 2"
+author: "Ron Balaban, Brandon Chung, Yanyi Li, Chi Hang(Philip) Cheung, Jiaxin Zheng"
+date: "2025-03-13"
+output:
+  html_document: default
+  pdf_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+options(tinytex.verbose = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(caret)
+library(dplyr)
+library(e1071)
+library(forecast)
+library(feasts)
+library(ggplot2)
+library(ggfortify)
+library(GGally)
+library(knitr)
+library(kernlab)
+library(lubridate)
+library(latex2exp) 
+library(missForest)
+library(mice)
+library(readxl)
+library(readr) 
+library(tsibble)
+library(tidyr)
+library(VIM)
+library(writexl)
+library(tibble)
+library(corrplot)
+```
+
+## ----------------------------------------------------------------------------
+
+#### Instructions
+
+<p style="color:green">
+
+This is role playing. I am your new boss. I am in charge of production
+at ABC Beverage, and you are a team of data scientists reporting to me.
+My leadership has told me that new regulations require us to understand
+our manufacturing process, the predictive factors, and be able to report
+to them our predictive model of PH.
+
+Please use the historical data set I am providing. Build and report the
+factors in BOTH a technical and non-technical report. I like to use Word
+and Excel. Please provide your non-technical report in a
+business-friendly, readable document and your predictions in an
+Excel-readable format. The technical report should show clearly the
+models you tested and how you selected your final approach.
+
+Please submit both Rpubs links and .rmd files or other readable formats
+for technical and non-technical reports. Also submit the Excel file
+showing the prediction of your models for pH.
+
+</p>
+
+-----------Starts Here-----------
+
+### To load the training and test datasets. I have uploaded the two files and converted them to CSV files in my repo, and made the links available to load:
+
+# Loading data:
+
+```{r}
+train_og<- read.csv('https://raw.githubusercontent.com/stormwhale/data-mines/refs/heads/main/StudentData.csv')
+new_test_data<- read.csv('https://raw.githubusercontent.com/stormwhale/data-mines/refs/heads/main/StudentEvaluation.csv')
+
+```
+
+# Data Exploration
+
+```{r}
+# Summary statistics
+summary(train_og)
+```
+From our data summary we can note that there are null values in most variables, these will be handled in the data pre-processing portion.
+
+```{r}
+# Visualizing predictor and target PH distributions
+
+# Convert the data to long format
+train_og_long <- pivot_longer(train_og, cols = where(is.numeric), names_to = "Variable", values_to = "Value")
+
+# Create histograms for all numeric variables
+ggplot(train_og_long, aes(x = Value)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black", alpha = 0.7) +
+  facet_wrap(~Variable, scales = "free_x") +
+  theme_minimal()
+```
+
+There are outliers seen in the distribution plots above, but none seem to be irregular or due to recording mistakes, so we will keep all values.
+
+```{r}
+# Visualizing distribution of target PH
+
+ggplot(train_og, aes(x = PH)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black", alpha = 0.7) +
+  labs(title = "Histogram of pH Levels", x = "pH Value", y = "Count") +
+  theme_minimal()
+```
+There is a left sided tail in the distribution of PH, and so, how to maintain a sufficiently high pH level as a buisness question is of interest.
+
+# Data Pre-processing
+
+Checking for and removing predictors with near-zero variance, as such
+predictors have very little variability and lend no predictive power.
+
+```{r}
+# Viewing any predictors with near-zero variance
+nzv <- nearZeroVar(train_og)
+colnames(train_og)[nzv]
+```
+
+```{r}
+# Removing near-zero variance column "Hyd.Pressure1" from train and new_test_data dataframes
+train <- train_og[, -nearZeroVar(train_og)]
+new_test_data <- new_test_data[, colnames(train)]
+
+# Viewing remaining predictor names
+colnames(train)
+```
+
+### Checking for and removing highly correlated predictors
+
+```{r}
+high_correlation <- findCorrelation(cor(train[,-c(1,25)]), cutoff = 0.75, exact = TRUE)
+length(high_correlation)
+```
+
+There are no highly correlated predictors from the training data,
+therefore we will not remove any predictors based on collinearity.
+
+### To visualize missing data:
+
+```{r}
+#Incrase margin so the text can be read:
+par(mar = c(10, 4, 4, 2))
+
+train %>% 
+  sapply(function(x) sum(is.na(x)/length(x)*100)) %>% 
+  barplot(main = "Percentage of Missing Values", 
+          ylab = "Percentage", 
+          col = "lightblue", 
+          las = 2)
+```
+
+### To train split the data first:
+
+```{r}
+set.seed(199)
+#Dropping the 4 missing pH rows from the training dataset:
+train<- train %>% drop_na(PH)
+
+#We need to replace the empty spaces with NA in the brand code column:
+train$Brand.Code<- replace(train$Brand.Code, train$Brand.Code=="", NA)
+
+#We need to convert Brand.Code column to factor for imputation:
+train$Brand.Code<- as.factor(train$Brand.Code)
+
+#Train split 80/20:
+train_idx<- createDataPartition(train$PH, p = 0.8, list = FALSE)
+train_data<- train[train_idx, ]
+test_data<- train[-train_idx, ]
+
+#'train/test' are now ready for imputations:
+```
+
+We tested three imputation methods and compared them to see which one
+will be least likely to create deviation from the overall mean of the
+dataset.
+
+## Imputations {.tabset}
+
+### kNN imputation:
+
+```{r}
+set.seed(199)
+#impute train:
+knn_imput_train<- kNN(train_data)
+#impute test:
+knn_imput_test<- kNN(test_data)
+```
+
+### randomForest imputation
+
+```{r}
+set.seed(199)
+#Running the imputation for the training set:
+rf_imput_train<- missForest(train_data)
+#Running the imputation for the test set:
+rf_imput_test<- missForest(test_data)
+
+#Need to convert the imputed train object to dataframe:
+rf_imput_train<- as.data.frame(rf_imput_train$ximp)
+#Need to convert the imputed test object to dataframe:
+rf_imput_test<- as.data.frame(rf_imput_test$ximp)
+```
+
+### MICE imputation:
+
+```{r}
+set.seed(199)
+#Running the imputation for the training set:
+mice_imput_train<- mice(train_data, m=5, maxit=50, meth='pmm', seed=100, printFlag = FALSE)
+#Running the imputation for the test set:
+mice_imput_test<- mice(test_data, m=5, maxit=50, meth='pmm', seed=100, printFlag = FALSE)
+
+
+mice_1_train<- complete(mice_imput_train, 1) #We choose the first imputed data
+mice_1_test<- complete(mice_imput_test, 1) #We choose the first imputed data
+```
+
+## To check if everything is imputed:
+
+```{r}
+is.na(c('knn_imput_train', 'rf_imput_train', 'mice_1_train', 'mice_1_test', 'rf_imput_test', 'knn_imput_test')) %>% any() #False
+```
+
+To visualize the variations of the dataset after imputation through the
+above three methods:
+
+## Imputed density plots {.tabset}
+
+### KNN imputed density plots
+
+```{r}
+plot(density(unlist(train_data[, -1]), na.rm=TRUE),
+     main='KNN imputed vs original data w/ NA removed')
+lines(density(unlist(knn_imput_train[, -1]), na.rm=TRUE),
+      col = 'red')
+legend('topright', legend = c("Original (with NA)", "kNN Imputed (no NA)"), 
+       col = c("black", "red"), lty = 3)
+```
+
+### RandomForest imputed density plots
+
+```{r}
+plot(density(unlist(train_data[, -1]), na.rm=TRUE),
+     main='RF imputed vs original data w/ NA removed')
+lines(density(unlist(rf_imput_train[, -1]), na.rm=TRUE),
+      col = 'red')
+legend('topright', legend = c("Original (with NA)", "randomForest Imputed (no NA)"), 
+       col = c("black", "red"), lty = 3)
+```
+
+### MICE imputed density plots
+
+```{r}
+plot(density(unlist(train_data[, -1]), na.rm=TRUE),
+     main='MICE imputed vs original data w/ NA removed')
+lines(density(unlist(mice_1_train[, -1]), na.rm=TRUE),
+      col = 'red')
+legend('topright', legend = c("Original (with NA)", "MICE Imputed (no NA)"), 
+       col = c("black", "red"), lty = 3)
+```
+
+**Running a t-test to compare all column values except for the first
+column for both the original and the imputed dataset. P-value \> 0.05,
+indicating the imputation did not change the overall data structure.**
+
+```{r}
+t.test(train[, -1], mice_1_train[, -1]) #No difference
+t.test(train[, -1], knn_imput_train[, -1]) #Significant difference
+t.test(train[, -1], rf_imput_train[, -1])#No difference
+```
+
+**Conclusion: KNN changes the dataset structure significantly, while
+randomForest and MICE did not. We will exclude KNN imputation and select
+MICE as our imputation method.**
+
+To separate the predictors from the target variables:
+
+```{r}
+#Separate the PH column from the mice_1_test:
+mice_1_test_predictors<- mice_1_test %>% select(-PH)
+mice_1_test_target<- mice_1_test$PH
+```
+
+## ----------------------------------------------------------------------------
+
+# Data Modeling
+
+## Models: {.tabset}
+
+### Cubist
+
+```{r warning=FALSE}
+# Cubist Model
+library(Cubist)
+
+# Train Cubist model on MICE-imputed data
+set.seed(199)
+cubist_model <- train(
+  PH ~ .,
+  data = mice_1_train,
+  method = "cubist",
+  trControl = trainControl(method = "cv", number = 5),
+  tuneGrid = expand.grid(committees = c(1, 5, 10), neighbors = c(0, 3, 5, 7))
+)
+
+# Make predictions on test set
+cubist_pred <- predict(cubist_model, newdata = mice_1_test_predictors)
+
+# Evaluate performance using caret functions
+cubist_rmse <- caret::RMSE(cubist_pred, mice_1_test_target)
+cubist_r2 <- caret::R2(cubist_pred, mice_1_test_target)
+
+# Print results
+cat("Cubist Model Performance:\n")
+cat("RMSE:", cubist_rmse, "\n")
+cat("R-squared:", cubist_r2, "\n")
+
+# Variable importance
+varImp(cubist_model)
+```
+
+### XGBoosting
+
+```{r warning=FALSE}
+# XGBoost Model
+library(xgboost)
+
+# Prepare data for XGBoost
+xgb_train <- mice_1_train %>% select(-PH)
+xgb_test <- mice_1_test %>% select(-PH)
+
+# Convert factors to numeric (XGBoost requires numeric matrix)
+xgb_train <- model.matrix(~ . -1, data = xgb_train)
+xgb_test <- model.matrix(~ . -1, data = xgb_test)
+
+# Create DMatrix objects
+dtrain <- xgb.DMatrix(data = xgb_train, label = mice_1_train$PH)
+dtest <- xgb.DMatrix(data = xgb_test, label = mice_1_test$PH)
+
+# Set parameters
+params <- list(
+  objective = "reg:squarederror",
+  eta = 0.01,
+  max_depth = 6,
+  min_child_weight = 5,
+  subsample = 0.8,
+  colsample_bytree = 0.8
+)
+
+# Train XGBoost model
+set.seed(199)
+xgb_model <- xgb.cv(
+  params = params,
+  data = dtrain,
+  nrounds = 500,
+  nfold = 5,
+  early_stopping_rounds = 20,
+  print_every_n = 10,
+  verbose = 1
+)
+
+# Final model with optimal rounds
+final_xgb <- xgboost(
+  params = params,
+  data = dtrain,
+  nrounds = xgb_model$best_iteration,
+  verbose = 0
+)
+
+# Make predictions
+xgb_pred <- predict(final_xgb, dtest)
+
+# Evaluate performance using caret functions
+xgb_rmse <- caret::RMSE(xgb_pred, mice_1_test_target)
+xgb_r2 <- caret::R2(xgb_pred, mice_1_test_target)
+
+# Print results
+cat("\nXGBoost Model Performance:\n")
+cat("RMSE:", xgb_rmse, "\n")
+cat("R-squared:", xgb_r2, "\n")
+
+# Variable importance
+importance_matrix <- xgb.importance(model = final_xgb)
+xgb.plot.importance(importance_matrix)
+```
+
+### RandomForest
+
+```{r}
+#The original code was tuned by the code ' rf_tune<- expand.grid(mtry = seq(20, (ncol(mice_1_train)-1), by = 2))'
+#The best model was mtry = 29.
+#In here we applied mtry = 29 directly to reduce computation time when rendering the html file
+
+#fit model with MICE imputed data:
+rf_model_mice<-train(PH~.,
+                data = mice_1_train,
+                method = 'rf',
+                tuneGrid = data.frame(mtry=29),
+                trControl = trainControl(method='cv', number=10),
+                ntree = 1000)
+
+#Checking importance chart from the fitted model:
+plot(varImp(rf_model_mice))
+
+#Making prediction based on the training test data:
+rf_pred_mice<- predict(rf_model_mice, mice_1_test_predictors)
+
+#Get the best tuned hyperparameters:
+rf_model_mice$bestTune #Best model mtry = 29
+
+#Getting the residual metrics:
+postResample(rf_pred_mice, mice_1_test_target)
+
+#RMSE = 0.10267; R^2 = 0.66
+```
+
+### MARS Model
+
+```{r}
+library(earth)
+
+set.seed(199)
+
+# Using the MICE test
+
+# Training data
+x_train <- mice_1_train %>% select(-PH)
+y_train <- mice_1_train$PH
+
+# Testing data
+x_test <- mice_1_test %>% select(-PH)
+y_test <- mice_1_test$PH
+
+# Create grid for tuning
+marsGrid <- expand.grid(.degree = 1:2, .nprune = 2:38)
+
+# Set the cross-validation control
+mars_ctrl <- trainControl(
+  method = "cv", 
+  number = 10 # use 10 fold
+)
+
+# Train with MARS model with MICE imputed
+marsTuned <- train(x = x_train, y = y_train,
+                   method = "earth",
+                   tuneGrid = marsGrid,
+                   trControl = mars_ctrl)
+print(marsTuned)
+
+# Make predictions
+mars_pred <- predict(marsTuned, newdata = x_test)
+MARS <- postResample(pred = mars_pred, obs = y_test)
+
+print(MARS)
+```
+
+### KNN
+
+```{r}
+KNNctrl <- trainControl(method = "cv", number = 10)
+
+knnModel <- train(PH ~ .,
+                  data = mice_1_train,
+                  preProcess = c("center", "scale"),
+                  method = "knn",
+                  tuneLength = 25,
+                  trControl = KNNctrl)
+
+print(knnModel)
+
+#Predict
+knnPred <- predict(knnModel, newdata = mice_1_test_predictors)
+
+KNN <- postResample(pred = knnPred, obs = mice_1_test_target)
+
+print(KNN)
+```
+
+### Neural Network
+
+```{r}
+nnetGrid <- expand.grid(.decay = c(0, .01, 1),
+                        .size = c(1:10),
+                        .bag = FALSE)
+
+ctrl <- trainControl(
+  method = "repeatedcv",  
+  number = 10,            
+  repeats = 3,            
+  verboseIter = FALSE      
+)
+
+set.seed(199)
+nnetTune <- train(PH ~ .,
+                  data = mice_1_train,
+                  method = "avNNet",
+                  tuneGrid = nnetGrid,
+                  trControl = ctrl,
+                  linout = TRUE,  trace = FALSE,
+                  MaxNWts = 5* (ncol(x_train) + 1) + 5 + 1,
+                  maxit = 250)
+
+print(nnetTune)
+
+#Predict
+nnet_pred <- predict(nnetTune, newdata = mice_1_test_predictors)
+
+nnet <- postResample(pred = nnet_pred, obs = mice_1_test_target)
+
+print(nnet)
+```
+
+### OLS
+
+```{r}
+set.seed(199)
+# Fit OLS model
+ols_model <- lm(PH ~ ., data = mice_1_train)
+
+# Make predictions on test set
+ols_pred <- predict(ols_model, newdata = mice_1_test_predictors)
+
+# Evaluate performance
+postResample(pred = ols_pred, obs = mice_1_test_target)
+
+# Variable importance
+varImp(ols_model)
+```
+
+### PLS
+
+```{r}
+set.seed(199)
+library(pls)
+
+# Fit PLS model
+pls_model <- plsr(PH ~ ., data = mice_1_train, scale = TRUE, validation = "CV")
+
+# Make predictions on test set
+pls_pred <- predict(pls_model, newdata = mice_1_test_predictors)
+
+pls_pred <- pls_pred[, , 1]  # Extract first component
+pls_pred <- as.numeric(pls_pred)  # Convert to vector
+
+
+# Evaluate Performance
+postResample(pred = pls_pred, obs = mice_1_test_target)
+
+# Variable importance
+varImp(pls_model)
+```
+
+### Ridge
+
+```{r}
+set.seed(199)
+
+# Ridge regression model 
+library(glmnet)
+
+# converting predictor variables to matrices
+x_train <- as.matrix(mice_1_train %>% select(-PH))
+y_train <- mice_1_train$PH  # Target variable
+
+x_test <- as.matrix(mice_1_test_predictors)
+y_test <- mice_1_test_target  # Test target
+
+ridge_model <- glmnet(x_train, y_train, alpha = 0)
+
+# Using cross validation to find best lambda for regularization
+cv_ridge <- cv.glmnet(x_train, y_train, alpha = 0)
+best_lambda <- cv_ridge$lambda.min  # Optimal lambda
+
+best_lambda
+
+# Training ridge model
+ridge_best <- glmnet(x_train, y_train, alpha = 0, lambda = best_lambda)
+
+# Making predictions on test set
+ridge_pred <- predict(ridge_best, newx = x_test)
+ridge_pred <- as.numeric(ridge_pred)  # Ensure correct format
+
+# Evaluate performance
+postResample(pred = ridge_pred, obs = y_test)
+
+# Variable importance
+varImp(ridge_best, lambda = best_lambda)
+```
+
+### SVM
+
+```{r}
+# Set up cross-validation and preprocessing
+svm_ctrl <- trainControl(method = "cv", number = 10)
+
+# Train SVM with Radial Basis Function kernel
+set.seed(199)
+svm_model <- train(PH ~ ., 
+                   data = mice_1_train,
+                   method = "svmRadial",
+                   trControl = svm_ctrl,
+                   preProcess = c("center", "scale"), # SVMs are sensitive to scale of input features, so center and scale 
+                   tuneLength = 10)
+
+# View model performance across hyperparameters
+print(svm_model)
+
+# Make predictions
+svm_pred <- predict(svm_model, newdata = mice_1_test_predictors)
+
+# Evaluate performance
+svm_metrics <- postResample(pred = svm_pred, obs = mice_1_test_target)
+print(svm_metrics)
+
+# Variable importance
+svm_varimp <- varImp(svm_model)
+plot(svm_varimp)
+```
+
+Support Vector Machines with Radial Basis Function Kernel 2055 samples
+32 predictor
+
+Pre-processing: centered (34), scaled (34) Resampling: Cross-Validated
+(10 fold) Summary of sample sizes: 1850, 1849, 1850, 1850, 1849, 1850,
+... Resampling results across tuning parameters: C RMSE Rsquared MAE\
+0.25 0.1254060 0.4781279 0.09351635 0.50 0.1219222 0.5036008 0.08993672
+1.00 0.1198646 0.5178693 0.08787178 2.00 0.1176100 0.5337863 0.08620710
+4.00 0.1157883 0.5474234 0.08530468 8.00 0.1154913 0.5519441 0.08560608
+16.00 0.1161971 0.5514808 0.08666007 32.00 0.1183374 0.5443769
+0.08822439 64.00 0.1225489 0.5261688 0.09184539 128.00 0.1269883
+0.5076909 0.09508938
+
+Tuning parameter 'sigma' was held constant at a value of 0.02010561 RMSE
+was used to select the optimal model using the smallest value. The final
+values used for the model were sigma = 0.02010561 and C = 8. RMSE
+Rsquared MAE 0.12160863 0.52309895 0.08841903
+
+## ----------------------------------------------------------------------------
+
+# Plotting the model metrics
+
+```{r}
+#Complie all the metrics into a list:
+metrics<- list(cubist = postResample(cubist_pred, mice_1_test_target),
+     xgb = postResample(xgb_pred, mice_1_test_target),
+     randomForest = postResample(rf_pred_mice, mice_1_test_target),
+     MARS = postResample(mars_pred, mice_1_test_target),
+     KNN = postResample(knnPred, mice_1_test_target),
+     Neural_network = postResample(nnet_pred, mice_1_test_target),
+     OLS = postResample(ols_pred, mice_1_test_target),
+     ridge = postResample(ridge_pred, mice_1_test_target),
+     svm = postResample(svm_pred, mice_1_test_target))
+
+#Convert the list into a dataFrame and then in a tidy form:
+metrics_df<- as.data.frame(metrics)
+metrics_t<- t(metrics_df) #Transpose the rows to column and vice versa
+metrics_t<- as_tibble(metrics_t, rownames='models')
+metrics_long<- metrics_t %>% pivot_longer(col=c(2:4),
+                                   names_to = 'metrics',
+                                   values_to = 'values') 
+# We will only look at RSquare and RMSE
+metrics_long<- metrics_long %>% 
+  filter(metrics!='MAE')
+# Re-arranging the metrics values
+metrics_long$models <- factor(metrics_long$models, 
+                        levels = metrics_long$models[metrics_long$metrics == 'Rsquared'][order(-metrics_long$values[metrics_long$metrics == 'Rsquared'])])
+#Plotting all metrics in a barplot:
+ggplot(metrics_long, aes(x=models, y=values, fill=metrics))+
+  geom_bar(stat = "identity", position='dodge')+
+  coord_flip()+
+  labs(title = "Model Performance: RMSE and R-squared", subtitle = 'The highest Rsquared with the lowest RMSE values represent the best model') +
+  scale_fill_manual(values = c("RMSE" = "skyblue", "Rsquared" = "brown")) +
+  theme_minimal()
+```
+
+RandomForest has the highest RSquared and RMSE
+
+# Exploring the top ten predictor relationships with the target variable:
+```{r}
+#select top ten predictor names from the RF model:
+rf_ten<- varImp(rf_model_mice)
+top_ten_predictor<- rf_ten$importance %>%
+  as.data.frame() %>% 
+  rownames_to_column(var = 'predictor') %>% 
+  arrange(desc(Overall)) %>% 
+  slice_max(Overall, n=11) %>% 
+  pull(predictor)
+
+#Since the brand.code was converted as a factor, we will exclude a single factor 'C' from the correlation.
+existing_vars <- top_ten_predictor[top_ten_predictor %in% colnames(train_og)]
+
+#Impute the original data as a whole for correlation calculation:
+imputed_train_og<-mice(train_og, m=5, maxit=50, meth='pmm', seed=100, printFlag = FALSE)
+imputed_train_og<- complete(imputed_train_og, 1)
+
+#Calculate the correlation of these predictors with the target variable pH:
+corr_top_ten<- imputed_train_og %>% 
+  select(all_of(c("PH", existing_vars)))
+
+#Correlation plot:
+corr_top_ten %>% cor() %>% corrplot::corrplot(order = 'hclust')
+```
+
+
+# Data Prediction and exportation to excel
+
+## Imputing new test data {.tabset}
+
+### Before Imputation
+
+```{r}
+#Remove pH column from the dataset:
+new_test_data<- new_test_data %>% select(-PH)
+
+#Converting empty values to NA in 'Brand.Code' Column:
+new_test_data$Brand.Code<- replace(new_test_data$Brand.Code, new_test_data$Brand.Code=="", NA)
+
+#Converting 'Brand.Code' column as factors:
+new_test_data$Brand.Code<- as.factor(new_test_data$Brand.Code)
+
+#Checking missing data in the new_test_data set:
+par(mar = c(10, 4, 4, 2))
+
+new_test_data %>% 
+  sapply(function(x) sum(is.na(x)/length(x)*100)) %>% 
+  barplot(main = "Percentage of Missing Values", 
+          ylab = "Percentage", 
+          col = "lightblue", 
+          las = 2)
+
+```
+
+### After MICE Imputation and visualization:
+
+```{r}
+#Impute with MICE:
+imputed_new_test_data<- mice(new_test_data, m=5, maxit=50, meth='pmm', seed=100, printFlag = FALSE)
+#Select the first iteration:
+imputed_new_test_data<- complete(imputed_new_test_data, 1)
+
+#Visualize the data again for missing values:
+par(mar = c(10, 4, 4, 2))
+
+imputed_new_test_data %>% 
+  sapply(function(x) sum(is.na(x)/length(x)*100)) %>% 
+  barplot(main = "Percentage of Missing Values", 
+          ylab = "Percentage", 
+          col = "lightblue", 
+          las = 2)
+#All missing data are imputed
+
+#Checking if the imputation creates bias:
+plot(density(unlist(imputed_new_test_data[, -1]), na.rm=TRUE),
+     main='MICE imputed test data vs original data w/ NA removed')
+lines(density(unlist(imputed_new_test_data[, -1]), na.rm=TRUE),
+      col = 'red')
+legend('topright', legend = c("Original (with NA)", "MICE Imputed (no NA)"), 
+       col = c("black", "red"), lty = 3)
+
+#Also use T-test to check for mean bias:
+t.test(new_test_data[, -1], imputed_new_test_data[, -1])
+#P-value >> 0.05, indicating no statistical difference in mean between the before and after imputed dataset
+```
+## Data prediction and exportation:
+```{r}
+rf_ph_result<- predict(rf_model_mice, imputed_new_test_data)
+
+#Combine the pH values with the new_tes_data:
+imputed_new_test_data$pH <- rf_ph_result
+
+#Exporting results:
+write_xlsx(imputed_new_test_data, 'predicted_pH.xlsx')
+```
+
+
+

@@ -1,0 +1,183 @@
+---
+title: "Data 624_Exercise 3.1_HW4"
+author: "Jiaxin Zheng"
+date: "2025-03-30"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Exercise 3.1
+The UC Irvine Machine Learning Repository contains a data set related to glass identification. The data consist of 214 glass samples labeled as one of seven class categories. There are nine predictors, including the refractive index and percentages of eight elements: Na, Mg, Al, Si, K, Ca, Ba, and Fe.
+
+The data can be accessed via:
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(mlbench)
+library(tidyverse)
+library(ggplot2)
+library(reshape2)
+```
+```{r}
+data(Glass)
+str(Glass)
+```
+### a. Using visualizations, explore the predictor variables to understand their distributions as well as the relationships between predictors.
+
+```{r}
+# There is no missing value
+sum(is.na(Glass))
+```
+```{r}
+glass <- melt(Glass, id.vars = "Type")
+ggplot(glass, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distributions of Glass Predictor Variables", x = "Value", y = "Count")
+
+```
+
+```{r}
+# Shape the data into long format
+glass_long <- Glass %>%
+  pivot_longer(cols = -Type, names_to = "Variable", values_to = "Value")
+
+# Boxplot for each variable grouped by glass type
+ggplot(glass_long, aes(x = Type, y = Value, fill = Type)) +
+  geom_boxplot(outlier.size = 1, outlier.alpha = 0.5) +
+  facet_wrap(~Variable, scales = "free", ncol = 3) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Boxplots of Predictor Variables by Glass Type",
+       x = "Glass Type",
+       y = "Value")
+
+```
+
+```{r}
+library(corrplot)
+cor_matrix <- cor(Glass[, 1:9])
+corrplot(cor_matrix, method = "color", type = "lower", addCoef.col = "black", tl.cex = 0.8)
+
+```
+### b. Do there appear to be any outliers in the data? Are any predictors skewed?
+
+#### From above's histogram plot:
+
+- RI: Right skewed with outliers, the tails is long.
+- Na: Looks like normal distribution with some outliers.
+- Mg: Left skewed, non-normal, and bi-modal.
+- Al: Looks like right skewed, normal distributions.
+- Si: Looks like a left skewed, but with long tails
+- K: Non-normal with outliers.
+- Ca: Right skewed with outliers.
+- Ba: Is heavily right skewed and with outliers. 
+- Fe: Is heavily right skewed and with outliers. 
+
+#### From the Boxplot:
+- We could see from the boxplots, there are numbers of outliers for all. 
+
+#### From the correlation plot:
+- Correlations between RI and Si have a negative correlation of -0.54
+- Correlations between RI and Ca have a positive correlation of 0.81.
+
+
+### c. Are there any relevant transformations of one or more predictors that might improve the classification model?
+- Box- Cox transformation maybe only works on positive values. Like K, Ba, Fe, I don't see much effect. 
+
+```{r}
+library(caret)
+
+# Preprocess using Box-Cox
+glass_numeric <- Glass[, 1:9]
+pp_boxcox <- preProcess(glass_numeric, method = "BoxCox")
+glass_boxcox <- predict(pp_boxcox, glass_numeric)
+
+```
+
+```{r}
+glass_boxcox_long <- glass_boxcox %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value")
+
+ggplot(glass_boxcox_long, aes(x = Value)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "white") +
+  facet_wrap(~Variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Histograms of Box-Cox Transformed Variables")
+
+```
+
+# Exercise 3.2
+The soybean data can also be found at the UC Irvine Machine Learning Repository. Data were collected to predict disease in 683 soybeans. The 35 predictors are mostly categorical and include information on the environmental conditions (e.g., temperature, precipitation) and plant conditions (e.g., left spots, mold growth). The outcome labels consist of 19 distinct classes.
+
+The data can be loaded via:
+```{r}
+library(mlbench)
+data(Soybean)
+```
+
+```{r}
+str(Soybean)
+```
+```{r}
+sum(is.na(Soybean))
+```
+
+### a. Investigate the frequency distributions for the categorical predictors. Are any of the distributions degenerate in the ways discussed earlier in this chapter?
+- There are many missing value, some of the predictors are also not very imbalanced.
+
+```{r}
+predictors <- Soybean %>% 
+  select(-Class)
+
+for (predictor in names(predictors)) {
+  print(
+    ggplot(data = predictors, aes(x = as.factor(predictors[[predictor]]))) +
+      geom_bar(fill = "steelblue") +
+      labs(
+        title = paste("Bar Plot of", predictor),
+        x = predictor,
+        y = "Count"
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  )
+}
+```
+
+### b. Roughly 18% of the data are missing. Are there particular predictors that are more likely to be missing? Is the pattern of missing data related to the classes?
+- In the plots, we can see there are a lot of missing values. Hail, lodging, seed.tmt, and sever have most missing values. 
+- I think, yes, based on the structure of the Soybean dataset, the pattern of missing data is related to the class labels.
+
+```{r}
+predictors <- Soybean |> select(-Class)
+
+# Count NAs per predictor
+missing_df <- data.frame(
+  Predictor = names(predictors),
+  Missing_Count = sapply(predictors, function(x) sum(is.na(x)))
+)
+
+ggplot(missing_df, aes(x = reorder(Predictor, -Missing_Count), y = Missing_Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Missing Value Count per Predictor",
+       x = "Predictor", y = "Missing Values") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+library(naniar)
+
+# Count % missing per column
+sort(colMeans(is.na(Soybean)), decreasing = TRUE)
+vis_miss(Soybean, sort_miss = TRUE)
+
+```
+
+
