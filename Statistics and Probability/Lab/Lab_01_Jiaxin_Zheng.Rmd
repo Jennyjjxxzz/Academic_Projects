@@ -1,0 +1,130 @@
+---
+title: 'Lab 1: Intro to R'
+author: "Jiaxin Zheng"
+date: "09/06/2024"
+output:
+  pdf_document: default
+  openintro::lab_report: default
+---
+
+```{r load-packages, message=FALSE}
+library(tidyverse)
+library(openintro)
+library(ggplot2)
+library(dplyr)
+```
+### Exercise 1
+
+```{r view-girls-counts}
+arbuthnot$girls
+data('arbuthnot', package='openintro')
+arbuthnot
+
+glimpse(arbuthnot)
+arbuthnot$girls
+```
+### Exercise 2
+
+There has decrease number in year 1640-1660. 
+And huge increase number of girls baptized during 1680-1700.
+
+```{r trend-girls}
+# Insert code for Exercise 2 here
+ggplot(data = arbuthnot, aes(x = year, y = girls,
+                             colour= girls)) + 
+  geom_point(size=3, alpha=0.5)+
+  geom_smooth(method = lm,
+              se=F)+
+  labs(title="Number of Girls Baptized Over The Years",
+     x="Year",
+     y="Number of Girls")+
+  theme_bw()
+```
+
+### Exercise 3
+
+Boys baptized rate decrease.
+
+```{r plot-prop-boys-arbuthnot}
+# Insert code for Exercise 3 here
+arbuthnot <- arbuthnot %>%
+  mutate(boy_to_girl_ratio = boys / girls)
+arbuthnot <- arbuthnot %>%
+  mutate(total = boys + girls)
+arbuthnot <- arbuthnot %>%
+  mutate(boy_ratio = boys / total)
+
+arbuthnot <- arbuthnot %>% 
+  mutate(boy_ratio=boys/total)
+  ggplot(arbuthnot, aes(x= year,
+                      y= boy_ratio,
+                      colour = boy_ratio))+
+  geom_point(size= 3, alpha= 0.5)+
+  geom_smooth(method= lm,
+              se=F)+
+  labs(title="Proportion of Boys Baptized Over Time",
+       x="Year",
+       y="Proportion of Boys")+
+  theme_bw()
+```
+### Exercise 4
+
+The years included in this data set is year 1940- 2002.
+The data frame is num.
+The variable's name are year, boys, and girls.
+
+```{r dim-present}
+# Insert code for Exercise 4 here
+data('present', package='openintro')
+str(present)
+summary(present)
+```
+
+
+### Exercise 5
+
+The number of birth records is more then number of baptism. 
+The Present data set is much bigger than Arbuthnot's data
+
+```{r count-compare}
+# Insert code for Exercise 5 here
+glimpse(present)
+glimpse(arbuthnot)
+```
+
+
+### Exercise 6
+
+Boy's birth decrease over the time. The Arbuthnot’s observation about boys being born in greater proportion than girls does not hold up in the U.S.
+
+```{r plot-prop-boys-present}
+# Insert code for Exercise 6 here
+present<- present %>%
+  mutate(boy_to_girl_ratio = boys / girls)
+present <- present %>%
+  mutate(total = boys + girls)
+present <- present %>%
+  mutate(boy_ratio = boys / total)
+
+present <- present %>% 
+  mutate(boy_ratio=boys/total)
+  ggplot(present, aes(x= year,
+                      y= boy_ratio,
+                      colour = boy_ratio))+
+  geom_point(size= 3, alpha= 0.5)+
+  geom_smooth(method= lm,
+              se=F)+
+  labs(title="Proportion of Boys Over Time",
+       x="Year",
+       y="Proportion of Boys")+
+  theme_bw()
+```
+### Exercise 7
+
+Year 1961 has most total number of births in the U.S.
+
+```{r find-max-total}
+# Insert code for Exercise 7 here
+present %>%
+  arrange(desc(total))
+```
