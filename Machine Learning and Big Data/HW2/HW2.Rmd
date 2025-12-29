@@ -1,0 +1,560 @@
+---
+title: "Data 622 Machine Learning and Big Data_HW2"
+author: "Jiaxin Zheng"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+---
+
+# Part I 
+## 1.1 Assignment Introduction
+This assignment focuses on one of the most important aspects of data science, Exploratory Data Analysis (EDA). Many surveys show that data scientists spend 60-80% of their time on data preparation. EDA allows you to identify data gaps & data imbalances, improve data quality, create better features and gain a deep understanding of your data before doing model training - and that ultimately helps train better models. In machine learning, there is a saying - "better data beats better algorithms" - meaning that it is more productive to spend time improving data quality than improving the code to train the model.
+
+
+# Part II: Pre-processing
+## 1.1 Load the csv file and nessary libraries.
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Load Libraries
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(pROC)
+library(ada)
+library(tidyverse)
+library(adabag)
+library(corrplot)
+library(dplyr)
+library(knitr)
+library(skimr)
+library(readr)
+```
+
+```{r}
+# Read data file
+df <- read.csv("https://raw.githubusercontent.com/Jennyjjxxzz/HW1/refs/heads/main/bank-full.csv", sep = ";")
+
+head (df)
+```
+
+```{r}
+str(df)
+```
+
+## 1.2 Missing and Duplicated Values
+- Missing Values: There are large amount of "unknown" in the categorical variable. In this case I will keep the "unknown" value. </br>
+The reason why I chose to keep the "unknown" value instead place with NA, because in this dataset "unknown" variables are treated as a separate category, in case there is an underlying pattern with the target variable(y). </br> 
+I think Tree-Base model and AdaBoost will handle well for categorical variables. 
+- encode categorical variables
+
+```{r}
+# Count NA values
+colSums(is.na(df))
+
+# Check for string "unknown"
+sapply(df, function(x) sum(x == "unknown", na.rm = TRUE))
+
+# Check for duplicated rows
+sum(duplicated(df))
+```
+## 1.3 Convert the variables to factor
+```{r}
+cat_cols <- c("job","marital","education","default","housing","loan",
+              "contact","month","poutcome","y")
+num_cols <- c("age","balance","day","duration","campaign","pdays","previous")
+
+df <- df %>%
+  mutate(
+    across(all_of(cat_cols), ~ as.factor(.x)),
+    across(all_of(num_cols), ~ as.numeric(.x))
+  )
+```
+
+## Part III: Split the data 80 training/ 20 testing
+
+```{r}
+set.seed(123)
+# Slit the data (80% training, 20% testing)
+idx   <- createDataPartition(df$y, p = 0.8, list = FALSE)
+train <- df[idx, ]
+test  <- df[-idx, ]
+```
+
+```{r}
+# Check the distribution of target variable in both sets
+prop.table(table(train$y))
+```
+
+
+## Part IV: Experiment
+
+### 3.1 Decision Tree: 
+
+- Hypothesis: A simple decision tree with default parameters will provide acceptable performance.
+
+### Decision Tree Model 1: 
+
+- In Decision Tree Model 1, I use simple default setting for the model.  
+
+```{r}
+set.seed(123)
+
+dt_model1 <- rpart(y ~ ., data = train, method = "class", control = rpart.control(minsplit = 10, cp = 0.01))
+
+rpart.plot(dt_model1,box.palette = "auto", nn = TRUE, main="Default Decision Tree Model")
+```
+
+```{r}
+# Evaluate
+pred_dt1 <- predict(dt_model1, test, type = "class")
+probs_dt1 <- predict(dt_model1, test, type = "prob")[,"yes"] 
+cm_dt1 <- confusionMatrix(pred_dt1, test$y, positive = "yes")
+```
+
+```{r}
+# Extract Precision, Recall, F1
+precision_dt1 <- cm_dt1$byClass["Pos Pred Value"]
+recall_dt1 <- cm_dt1$byClass["Sensitivity"]
+f1_dt1 <- (2 * precision_dt1 * recall_dt1) / (precision_dt1 + recall_dt1)
+# ROC/AUC
+roc_dt1 <- pROC::roc(response = factor(test$y, levels = c("no", "yes")),predictor = probs_dt1)
+AUC_dt1 <- as.numeric(pROC::auc(roc_dt1))
+
+results_dt1 <- data.frame(
+  Model = "Decision Tree - Baseline",
+  Accuracy = cm_dt1$overall["Accuracy"],
+  Precision = precision_dt1,
+  Recall = recall_dt1,
+  F1_Score = f1_dt1,
+  AUC = AUC_dt1
+)
+kable(results_dt1)
+```
+
+
+```{r}
+print(cm_dt1)
+```
+
+
+
+### Decision Tree Model 2: 
+
+- Hypothesis: Tuning and pruning the decision tree using cross-validation will reduce overfitting and improve model generalization.
+
+- In Decision Tree Model 2, I setup 5-fold CV.
+
+- Using CV to choose higher cp (stronger pruning) will reduce variance and improve generalization (higher AUC/F1) vs default setting of decision tree.
+
+```{r}
+# Cross-validation setup
+
+ctrl_cv <- trainControl(method = "cv", number = 5)
+```
+
+
+- cp values close to 0 (like 0.000 or 0.005) allow the tree to grow very deep, and tests for overfitting scenarios.
+
+- cp values up to 0.05 prune the tree quite heavily, and tests for underfitting scenarios.
+
+```{r}
+set.seed(123)
+dt_tuned <- train(
+  y ~ ., data = train,
+  method = "rpart",
+  trControl = ctrl_cv,
+  tuneGrid = expand.grid(cp = seq(0.000, 0.05, by = 0.005))
+)
+
+```
+
+
+```{r}
+probs <- predict(dt_tuned, newdata = test, type = "prob")[,"yes"]
+preds <- ifelse(probs >= 0.5, "yes", "no")
+cm_dt2 <- confusionMatrix(factor(preds, levels = c("yes", "no")), test$y, positive = "yes")
+```
+
+```{r}
+roc_dt2 <- pROC::roc(response = factor(test$y, levels = c("no","yes")),
+                     predictor = probs)
+AUC_dt2 <- as.numeric(pROC::auc(roc_dt2))
+
+# Extract Precision, Recall, F1
+precision_dt2 <- cm_dt2$byClass["Pos Pred Value"]
+recall_dt2 <- cm_dt1$byClass["Sensitivity"]
+f1_dt2 <- (2 * precision_dt2 * recall_dt2) / (precision_dt2 + recall_dt2)
+
+results_dt2 <- data.frame(
+  Model = "Decision Tree - Baseline",
+  Accuracy = cm_dt1$overall["Accuracy"],
+  Precision = precision_dt2,
+  Recall = recall_dt2,
+  F1_Score = f1_dt2,
+  AUC = AUC_dt2
+)
+kable(results_dt2)
+```
+
+```{r}
+print(cm_dt2)
+```
+
+
+- The optimal cp value is near the peak of the curve (around 0.005–0.010).
+
+```{r}
+# Visualize the effect of cp
+plot(dt_tuned, main = "Decision Tree Hyperparameter Tuning (cp vs Accuracy)")
+
+```
+
+
+
+
+### 3.2 Random Forest: 
+
+- Hypothesis: A baseline Random Forest model with default settings (100 trees) will outperform the single decision tree models in both accuracy and AUC.
+
+## Random Forest Model 1 (100 trees)
+
+- Standard Random Forest with All Features (100 trees)
+
+```{r}
+set.seed(123)
+rf_model1 <- randomForest(
+  y ~ ., data = train,
+  ntree = 100,
+  importance = TRUE,
+  num.threads = parallel::detectCores()
+)
+```
+
+```{r}
+varImpPlot(rf_model1, main = "Random Forest - Feature Importance")
+```
+
+
+```{r}
+rf_probs <- predict(rf_model1, newdata = test, type = "prob")[,"yes"]
+rf_preds <- ifelse(rf_probs >= 0.5, "yes", "no")
+cm_rf1 <- confusionMatrix(factor(rf_preds, levels = c("yes", "no")), test$y, positive = "yes")
+
+```
+
+```{r}
+precision_rf1 <- cm_rf1$byClass["Pos Pred Value"]
+recall_rf1 <- cm_rf1$byClass["Sensitivity"]
+f1_rf1 <- (2 * precision_rf1 * recall_rf1) / (precision_rf1 + recall_rf1)
+roc_rf1 <- pROC::roc(response = factor(test$y, levels = c("no","yes")),
+                     predictor = rf_probs)
+AUC_rf1 <- as.numeric(pROC::auc(roc_rf1))
+
+```
+
+```{r}
+results_rf1 <- data.frame(
+  Model = "Random Forest Model 1 (100 trees)",
+  Accuracy = cm_rf1$overall["Accuracy"],
+  Precision = precision_rf1,
+  Recall = recall_rf1,
+  F1_Score = f1_rf1,
+  AUC = AUC_rf1
+)
+kable(results_rf1)
+
+```
+
+
+
+## Random Forest Model 2 (500 trees)
+
+- Hypothesis: Increase the number of the tree in the model can improving the model.
+
+- In the Random Forest Model 2, I increase the number of the tree up to 500.
+
+```{r}
+set.seed(123)
+rf_model2 <- randomForest(
+  y ~ ., data = train,
+  ntree = 500,
+  importance = TRUE,
+  num.threads = parallel::detectCores()
+)
+```
+
+```{r}
+varImpPlot(rf_model2, main = "Random Forest - Feature Importance")
+```
+
+
+```{r}
+rf_probs2 <- predict(rf_model2, newdata = test, type = "prob")[,"yes"]
+rf_preds2 <- ifelse(rf_probs2 >= 0.5, "yes", "no")
+cm_rf2 <- confusionMatrix(factor(rf_preds2, levels = c("yes", "no")), test$y, positive = "yes")
+
+```
+
+```{r}
+precision_rf2 <- cm_rf1$byClass["Pos Pred Value"]
+recall_rf2 <- cm_rf1$byClass["Sensitivity"]
+f1_rf2 <- (2 * precision_rf2 * recall_rf2) / (precision_rf2 + recall_rf2)
+roc_rf2 <- pROC::roc(response = factor(test$y, levels = c("no","yes")),
+                     predictor = rf_probs2)
+AUC_rf2 <- as.numeric(pROC::auc(roc_rf2))
+
+```
+
+```{r}
+results_rf2 <- data.frame(
+  Model = "Random Forest Model 2 (500 trees) ",
+  Accuracy = cm_rf1$overall["Accuracy"],
+  Precision = precision_rf2,
+  Recall = recall_rf2,
+  F1_Score = f1_rf2,
+  AUC = AUC_rf2
+)
+kable(results_rf2)
+
+```
+
+
+## Random Forest Model 3(tuning)
+
+- Hypothesis: Tuning the mtry parameter will further optimize the bias–variance trade-off, improving performance.
+
+- In this model I keep the number of tree 500.
+
+- Set up the number of features randomly selected at each split. It controls how much randomness there is in the forest.
+
+- Smaller mtry is less correlation andlower variance, but possibly higher bias.
+
+- Larger mtry is lower bias, but possibly higher variance.
+
+```{r}
+set.seed(123)
+rf_tuned <- randomForest(
+  y ~ ., data = train,
+  method = "rf",
+  trControl = ctrl_cv,
+  metric = "ROC",
+  tuneGrid = expand.grid(mtry = c(2,3,4,5,6,8,10)),
+  ntree = 500,
+  importance = TRUE,
+  num.threads = parallel::detectCores()
+)
+```
+
+
+```{r}
+rf_probs3 <- predict(rf_tuned, newdata = test, type = "prob")[,"yes"]
+rf_preds3 <- ifelse(rf_probs3 >= 0.5, "yes", "no")
+cm_rf3 <- confusionMatrix(factor(rf_preds3, levels = c("yes", "no")), test$y, positive = "yes")
+```
+
+```{r}
+precision_rf3 <- cm_rf2$byClass["Pos Pred Value"]
+recall_rf3 <- cm_rf2$byClass["Sensitivity"]
+f1_rf3 <- (2 * precision_rf3 * recall_rf3) / (precision_rf3 + recall_rf3)
+roc_rf3 <- pROC::roc(response = factor(test$y, levels = c("no","yes")),
+                     predictor = rf_probs)
+AUC_rf3 <- as.numeric(pROC::auc(roc_rf3))
+```
+
+```{r}
+results_rf3 <- data.frame(
+  Model = "Random Forest - Tuned",
+  Accuracy = cm_rf3$overall["Accuracy"],
+  Precision = precision_rf3,
+  Recall = recall_rf3,
+  F1_Score = f1_rf3,
+  AUC = AUC_rf3
+)
+kable(results_rf3)
+```
+
+
+### 3.3 AdaBoost:
+
+### Adaboost Model 1:
+- Base Adaboost Model setup with low mfinal = 10.
+
+```{r}
+set.seed(123)
+
+# Train the Adaboost model
+ada_model1 <- boosting(y ~ ., data = train,
+                  boos = TRUE, mfinal = 10)
+
+```
+
+```{r}
+# Make predictions on the test set
+pred_ab <- predict(ada_model1, newdata = test)
+pred_ab_prob <- pred_ab$prob[,2]
+pred_ab_class <- factor(ifelse(pred_ab_prob > 0.5, "yes", "no"), levels = levels(test$y)) 
+
+conf_matrax_ab <- confusionMatrix(pred_ab_class, test$y)
+roc_ab <- roc(ifelse(test$y == "yes", 1, 0), pred_ab_prob)
+
+```
+
+```{r}
+auc_ab_control <- auc(roc_ab)
+
+print(conf_matrax_ab)
+```
+
+```{r}
+# Extract accuracy, precision, recall
+accuracy_ab  <- conf_matrax_ab$overall["Accuracy"]
+precision_ab <- conf_matrax_ab$byClass["Pos Pred Value"]
+recall_ab    <- conf_matrax_ab$byClass["Sensitivity"]
+roc_ab <- pROC::roc(response = factor(test$y, levels = c("no","yes")),
+                    predictor = pred_ab_prob)
+AUC_ab <- as.numeric(pROC::auc(roc_ab))
+
+# Compute F1 Score manually
+f1_ab <- (2 * precision_ab * recall_ab) / (precision_ab + recall_ab)
+
+# Combine metrics into a clean table
+results_ab <- data.frame(
+  Model     = "AdaBoost (adabag)",
+  Accuracy  = accuracy_ab,
+  Precision = precision_ab,
+  Recall    = recall_ab,
+  F1_Score  = f1_ab,
+  AUC       = AUC_ab
+)
+
+kable(results_ab, caption = "AdaBoost Model 1")
+```
+
+
+### Adaboost Model 2:
+- Increase the mfinal to 100, more weak learner may have higher capacity. 
+
+```{r}
+set.seed(123)
+
+# Train the Adaboost model
+ada_model2 <- boosting(y ~ ., data = train,
+                  boos = TRUE, mfinal = 100,
+                  control = rpart.control(cp = 0.0001,
+                                          minsplit = 3))
+
+```
+
+```{r}
+# Make predictions on the test set
+pred_ab2 <- predict(ada_model2, newdata = test)
+pred_ab_prob2 <- pred_ab2$prob[,2]
+pred_ab_class2 <- factor(ifelse(pred_ab_prob2 > 0.5, "yes", "no"), levels = levels(test$y)) 
+
+conf_matrax_ab2 <- confusionMatrix(pred_ab_class2, test$y)
+roc_ab2 <- roc(ifelse(test$y == "yes", 1, 0), pred_ab_prob2)
+
+```
+
+```{r}
+auc_ab_control2 <- auc(roc_ab2)
+
+print(conf_matrax_ab2)
+```
+
+```{r}
+# Extract accuracy, precision, recall
+accuracy_ab2  <- conf_matrax_ab2$overall["Accuracy"]
+precision_ab2 <- conf_matrax_ab2$byClass["Pos Pred Value"]
+recall_ab2    <- conf_matrax_ab2$byClass["Sensitivity"]
+roc_ab2 <- pROC::roc(response = factor(test$y, levels = c("no","yes")),
+                    predictor = pred_ab_prob2)
+AUC_ab2 <- as.numeric(pROC::auc(roc_ab2))
+# Compute F1 Score manually
+f1_ab2 <- (2 * precision_ab * recall_ab) / (precision_ab + recall_ab)
+
+# Combine metrics into a clean table
+results_ab2 <- data.frame(
+  Model     = "AdaBoost Model 2 - Tuned",
+  Accuracy  = accuracy_ab2,
+  Precision = precision_ab2,
+  Recall    = recall_ab2,
+  F1_Score  = f1_ab2,
+  AUC       = AUC_ab2
+)
+
+kable(results_ab2, caption = "AdaBoost Model Performance Summary")
+```
+
+
+### Final Result Table
+
+```{r}
+# Standardize each results table
+standardize_results <- function(df) {
+  stopifnot(is.data.frame(df))
+  
+  # Normalize metric names
+  names(df) <- gsub("^F1$", "F1_Score", names(df), ignore.case = TRUE)
+  names(df) <- gsub("^F1.Score$", "F1_Score", names(df), ignore.case = TRUE)
+  names(df) <- gsub("^AOC$", "AUC", names(df), ignore.case = TRUE)
+  names(df) <- gsub("^auc$", "AUC", names(df), ignore.case = TRUE)
+  names(df) <- gsub("^precision$", "Precision", names(df), ignore.case = TRUE)
+  names(df) <- gsub("^recall$", "Recall", names(df), ignore.case = TRUE)
+  names(df) <- gsub("^accuracy$", "Accuracy", names(df), ignore.case = TRUE)
+  names(df) <- gsub("^model$", "Model", names(df), ignore.case = TRUE)
+
+  wanted <- c("Model", "Accuracy", "Precision", "Recall", "F1_Score", "AUC")
+  
+  # Coerce types & select only the wanted columns in order
+  df %>%
+    mutate(
+      Model     = as.character(Model),
+      Accuracy  = as.numeric(Accuracy),
+      Precision = as.numeric(Precision),
+      Recall    = as.numeric(Recall),
+      F1_Score  = as.numeric(F1_Score),
+      AUC       = as.numeric(AUC)
+    ) %>%
+    select(all_of(wanted))
+}
+
+# Collect the result data frames
+res_names <- c(
+  "results_dt1","results_dt2",
+  "results_rf1","results_rf2","results_rf3",
+  "results_ab","results_ab2"
+)
+
+res_list <- mget(res_names, ifnotfound = list(NULL), inherits = TRUE)
+res_list <- Filter(Negate(is.null), res_list)
+
+# Standardize
+all_results <- res_list %>%
+  lapply(standardize_results) %>%
+  bind_rows() %>%
+  mutate(across(where(is.numeric), ~ round(., 4))) %>%
+  mutate(
+    Model = c(
+      "Decision Tree - Model 1",
+      "Decision Tree - Model 2 Tuned",
+      "Random Forest - Model 1_100 Trees",
+      "Random Forest - Model 2_500 Trees",
+      "Random Forest - Model 3_Tuned",
+      "AdaBoost - Model 1_10 Estimators",
+      "AdaBoost - Model 2_100 Estimators"
+    )
+  )
+
+knitr::kable(all_results, caption = "Model Comparison: Accuracy, Precision, Recall, F1, AUC")
+
+
+```
+
+### Conclusion:
+Among all tested algorithms, AdaBoost Model 2 with 100 estimators delivered the best overall performance, striking an excellent balance between precision, recall, and AUC.
+Random Forest models were a strong second choice. 
+
